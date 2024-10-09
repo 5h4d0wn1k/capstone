@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Windows SIEM Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .dashboard {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .panel {
+            flex: 1;
+            min-width: 300px;
+            background-color: #fff;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .severity-HIGH {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+        .severity-MEDIUM {
+            color: #f57c00;
+        }
+        .severity-LOW {
+            color: #388e3c;
+        }
+        .status-new {
+            color: #2196f3;
+        }
+        .status-acknowledged {
+            color: #ff9800;
+        }
+        .status-resolved {
+            color: #4caf50;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 5px 10px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 12px;
+            margin: 2px 2px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Windows SIEM Dashboard</h1>
+        <div class="dashboard">
+            <div class="panel">
+                <h2>Recent Events</h2>
+                <table id="events-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Source</th>
+                            <th>Event Type</th>
+                            <th>Severity</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="panel">
+                <h2>Recent Alerts</h2>
+                <table id="alerts-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Rule Name</th>
+                            <th>Severity</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="panel">
+                <h2>Network Logs</h2>
+                <table id="network-logs-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Source IP</th>
+                            <th>Destination IP</th>
+                            <th>Protocol</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function fetchData(url, tableId) {
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    const tableBody = document.querySelector(`#${tableId} tbody`);
+                    tableBody.innerHTML = '';
+                    data.slice(0, 10).forEach(item => {
+                        const row = document.createElement('tr');
+                        if (tableId === 'events-table') {
+                            row.innerHTML = `
+                                <td>${new Date(item.timestamp).toLocaleString()}</td>
+                                <td>${item.source}</td>
+                                <td>${item.event_type}</td>
+                                <td class="severity-${item.severity}">${item.severity}</td>
+                            `;
+                        } else if (tableId === 'alerts-table') {
+                            row.innerHTML = `
+                                <td>${new Date(item.timestamp).toLocaleString()}</td>
+                                <td>${item.rule_name}</td>
+                                <td class="severity-${item.severity}">${item.severity}</td>
+                                <td class="status-${item.status.toLowerCase()}">${item.status}</td>
+                                <td>
+                                    ${item.status === 'new' ? `
+                                        <button onclick="updateAlertStatus(${item.id}, 'acknowledged')">Acknowledge</button>
+                                        <button onclick="updateAlertStatus(${item.id}, 'resolved')">Resolve</button>
+                                    ` : item.status === 'acknowledged' ? `
+                                        <button onclick="updateAlertStatus(${item.id}, 'resolved')">Resolve</button>
+                                    ` : `
+                                        <button onclick="updateAlertStatus(${item.id}, 'new')">Reopen</button>
+                                    `}
+                                </td>
+                            `;
+                        } else if (tableId === 'network-logs-table') {
+                            row.innerHTML = `
+                                <td>${new Date(item.timestamp).toLocaleString()}</td>
+                                <td>${item.source_ip}</td>
+                                <td>${item.destination_ip}</td>
+                                <td>${item.protocol}</td>
+                            `;
+                        }
+                        tableBody.appendChild(row);
+                    });
+                })
+                .catch(error => console.error('Error fetching data:', error));
+        }
+
+        function updateAlertStatus(alertId, newStatus) {
+            fetch(`/api/alert/${alertId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ status: newStatus }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateDashboard();
+                } else {
+                    console.error('Failed to update alert status');
+                }
+            })
+            .catch(error => console.error('Error updating alert status:', error));
+        }
+
+        function updateDashboard() {
+            fetchData('/api/events', 'events-table');
+            fetchData('/api/alerts', 'alerts-table');
+            fetchData('/api/network_logs', 'network-logs-table');
+        }
+
+        // Initial update
+        updateDashboard();
+
+        // Update every 30 seconds
+        setInterval(updateDashboard, 30000);
+    </script>
+</body>
+</html>

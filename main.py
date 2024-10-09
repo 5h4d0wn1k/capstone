@@ -1,106 +1,26 @@
-import os
-import re
-import json
-import time
-import sqlite3
+import asyncio
+import aiohttp
+from aiohttp import web
+import aiojobs
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+import win32evtlog
+import win32evtlogutil
+import win32con
+import win32security
 import logging
-import ipaddress
 from datetime import datetime, timedelta
-from collections import defaultdict
-import threading
-import queue
-import xml.etree.ElementTree as ET
-from abc import ABC, abstractmethod
+import json
+import pcapy
+from scapy.all import *
 
 # Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('EnterpriseSTEM')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('WindowsSIEM')
 
-class LogSource(ABC):
-    @abstractmethod
-    def collect_logs(self):
-        pass
-
-    @abstractmethod
-    def parse_log(self, log_data):
-        pass
-
-class FileLogSource(LogSource):
-    def __init__(self, directory, file_pattern):
-        self.directory = directory
-        self.file_pattern = file_pattern
-        self.processed_files = set()
-
-    def collect_logs(self):
-        logs = []
-        for filename in os.listdir(self.directory):
-            if re.match(self.file_pattern, filename):
-                filepath = os.path.join(self.directory, filename)
-                if filepath not in self.processed_files:
-                    with open(filepath, 'r') as file:
-                        for line in file:
-                            logs.append(line.strip())
-                    self.processed_files.add(filepath)
-        return logs
-
-    def parse_log(self, log_data):
-        # Implement based on specific log format
-        pass
-
-class WindowsEventLogSource(LogSource):
-    def __init__(self, event_types=['System', 'Security', 'Application']):
-        self.event_types = event_types
-        # In a real implementation, you'd use the Windows API
-        # This is a placeholder for demonstration
-        
-    def collect_logs(self):
-        # Placeholder - in reality, you'd use win32evtlog or similar
-        return []
-
-    def parse_log(self, log_data):
-        # Parse Windows Event Log XML format
-        try:
-            root = ET.fromstring(log_data)
-            return {
-                'EventID': root.find('./System/EventID').text,
-                'TimeCreated': root.find('./System/TimeCreated').get('SystemTime'),
-                'Level': root.find('./System/Level').text,
-                'Task': root.find('./System/Task').text,
-                'Description': root.find('./EventData').text
-            }
-        except Exception as e:
-            logger.error(f"Error parsing Windows Event Log: {e}")
-            return None
-
-class SyslogSource(LogSource):
-    def __init__(self, host='0.0.0.0', port=514):
-        self.host = host
-        self.port = port
-        # In a real implementation, you'd set up a syslog server
-
-    def collect_logs(self):
-        # Placeholder - in reality, you'd implement a syslog server
-        return []
-
-    def parse_log(self, log_data):
-        # Parse syslog format
-        syslog_pattern = r'<(\d+)>(\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(.*)'
-        match = re.match(syslog_pattern, log_data)
-        if match:
-            priority, timestamp, hostname, message = match.groups()
-            facility = int(priority) // 8
-            severity = int(priority) % 8
-            return {
-                'facility': facility,
-                'severity': severity,
-                'timestamp': timestamp,
-                'hostname': hostname,
-                'message': message
-            }
-        return None
+Base = declarative_base()
 
 class Event:
     def __init__(self, source, event_type, timestamp, data, severity):
@@ -109,7 +29,6 @@ class Event:
         self.timestamp = timestamp
         self.data = data
         self.severity = severity
-        self.correlated_events = []
 
     def to_dict(self):
         return {
@@ -120,66 +39,11 @@ class Event:
             'severity': self.severity
         }
 
-class Rule(ABC):
-    def __init__(self, name, severity='MEDIUM'):
-        self.name = name
-        self.severity = severity
-
-    @abstractmethod
-    def matches(self, event):
-        pass
-
-class SimpleRule(Rule):
-    def __init__(self, name, pattern, severity='MEDIUM'):
-        super().__init__(name, severity)
-        self.pattern = pattern
-
-    def matches(self, event):
-        return self.pattern.lower() in str(event.data).lower()
-
-class ComplexRule(Rule):
-    def __init__(self, name, conditions, timeframe=60, threshold=5, severity='HIGH'):
-        super().__init__(name, severity)
-        self.conditions = conditions
-        self.timeframe = timeframe
-        self.threshold = threshold
-        self.event_history = []
-
-    def matches(self, event ):
-        # Add the current event to history
-        self.event_history.append(event)
-        
-        # Remove events outside the timeframe
-        cutoff_time = datetime.now() - timedelta(seconds=self.timeframe)
-        self.event_history = [e for e in self.event_history 
-                             if e.timestamp > cutoff_time]
-
-        # Check if all conditions are met and threshold is reached
-        matching_events = [e for e in self.event_history 
-                          if all(self._check_condition(e, c) 
-                                for c in self.conditions)]
-        
-        return len(matching_events) >= self.threshold
-
-    def _check_condition(self, event, condition):
-        field, operator, value = condition
-        event_value = getattr(event, field, None)
-        if event_value is None and isinstance(event.data, dict):
-            event_value = event.data.get(field)
-
-        if operator == 'equals':
-            return event_value == value
-        elif operator == 'contains':
-            return value in str(event_value)
-        elif operator == 'regex':
-            return re.search(value, str(event_value)) is not None
-        return False
-
 class Alert:
-    def __init__(self, rule, event, timestamp=None):
+    def __init__(self, rule, event):
         self.rule = rule
         self.event = event
-        self.timestamp = timestamp or datetime.now()
+        self.timestamp = datetime.now()
 
     def to_dict(self):
         return {
@@ -189,67 +53,223 @@ class Alert:
             'event': self.event.to_dict()
         }
 
-class Database:
-    def __init__(self, db_path):
-        self.db_path = db_path
-        self._create_tables()
+class Rule:
+    def __init__(self, name, severity='MEDIUM'):
+        self.name = name
+        self.severity = severity
 
-    def _create_tables(self):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS events
-                (id INTEGER PRIMARY KEY,
-                 source TEXT,
-                 event_type TEXT,
-                 timestamp TEXT,
-                 data TEXT,
-                 severity TEXT)
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS alerts
-                (id INTEGER PRIMARY KEY,
-                 rule_name TEXT,
-                 severity TEXT,
-                 timestamp TEXT,
-                 event_id INTEGER,
-                 FOREIGN KEY (event_id) REFERENCES events(id))
-            ''')
-            conn.commit()
+    def matches(self, event):
+        raise NotImplementedError
 
-    def store_event(self, event):
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO events (source, event_type, timestamp, data, severity)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (event.source, event.event_type, event.timestamp.isoformat(),
-                  json.dumps(event.data), event.severity))
-            return cursor.lastrowid
+class WindowsEventRule(Rule):
+    def __init__(self, name, event_id=None, source=None, level=None, severity='MEDIUM'):
+        super().__init__(name, severity)
+        self.event_id = event_id
+        self.source = source
+        self.level = level
 
-    def store_alert(self, alert, event_id):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute('''
-                INSERT INTO alerts (rule_name, severity, timestamp, event_id)
-                VALUES (?, ?, ?, ?)
-            ''', (alert.rule.name, alert.rule.severity,
-                  alert.timestamp.isoformat(), event_id))
+    def matches(self, event):
+        if self.event_id and str(event.data.get('EventID')) != str(self.event_id):
+            return False
+        if self.source and event.data.get('SourceName') != self.source:
+            return False
+        if self.level and event.data.get('Level') != self.level:
+            return False
+        return True
 
-    def get_recent_events(self, limit=100):
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute('''
-                SELECT * FROM events
-                ORDER BY timestamp DESC
-                LIMIT ?
-            ''', (limit,))
-            return cursor.fetchall()
+class EventModel(Base):
+    __tablename__ = 'events'
+    id = Column(Integer, primary_key=True)
+    source = Column(String)
+    event_type = Column(String)
+    timestamp = Column(DateTime)
+    data = Column(String)
+    severity = Column(String)
 
-class EnterpriseSTEM:
-    def __init__(self, db_path='siem.db'):
+class AlertModel(Base):
+    __tablename__ = 'alerts'
+    id = Column(Integer, primary_key=True)
+    rule_name = Column(String)
+    severity = Column(String)
+    timestamp = Column(DateTime)
+    event_id = Column(Integer, ForeignKey('events.id'))
+    status = Column(String, default='new')
+
+class NetworkLogModel(Base):
+    __tablename__ = 'network_logs'
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime)
+    source_ip = Column(String)
+    destination_ip = Column(String)
+    protocol = Column(String)
+    data = Column(String)
+
+class AsyncDatabase:
+    def __init__(self, db_url):
+        self.engine = create_async_engine(db_url)
+        self.SessionLocal = sessionmaker(
+            bind=self.engine, class_=AsyncSession, expire_on_commit=False
+        )
+
+    async def init(self):
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def store_event(self, event):
+        async with self.SessionLocal() as session:
+            db_event = EventModel(**event.to_dict())
+            session.add(db_event)
+            await session.commit()
+            return db_event.id
+
+    async def store_alert(self, alert, event_id):
+        async with self.SessionLocal() as session:
+            db_alert = AlertModel(
+                rule_name=alert.rule.name,
+                severity=alert.rule.severity,
+                timestamp=alert.timestamp,
+                event_id=event_id
+            )
+            session.add(db_alert)
+            await session.commit()
+            return db_alert.id
+
+    async def store_network_log(self, log):
+        async with self.SessionLocal() as session:
+            db_log = NetworkLogModel(**log)
+            session.add(db_log)
+            await session.commit()
+            return db_log.id
+
+    async def get_recent_events(self, limit=100):
+        async with self.SessionLocal() as session:
+            result = await session.execute(
+                select(EventModel).order_by(EventModel.timestamp.desc()).limit(limit)
+            )
+            return [row[0].to_dict() for row in result.fetchall()]
+
+    async def get_recent_alerts(self, limit=100):
+        async with self.SessionLocal() as session:
+            result = await session.execute(
+                select(AlertModel).order_by(AlertModel.timestamp.desc()).limit(limit)
+            )
+            return [row[0].to_dict() for row in result.fetchall()]
+
+    async def get_recent_network_logs(self, limit=100):
+        async with self.SessionLocal() as session:
+            result = await session.execute(
+                select(NetworkLogModel).order_by(NetworkLogModel.timestamp.desc()).limit(limit)
+            )
+            return [row[0].to_dict() for row in result.fetchall()]
+
+    async def update_alert_status(self, alert_id, status):
+        async with self.SessionLocal() as session:
+            result = await session.execute(
+                select(AlertModel).filter(AlertModel.id == alert_id)
+            )
+            alert = result.scalar_one_or_none()
+            if alert:
+                alert.status = status
+                await session.commit()
+                return True
+            return False
+
+class AsyncWindowsEventLogSource:
+    def __init__(self, log_type='Security'):
+        self.log_type = log_type
+        self.last_read_time = datetime.now() - timedelta(minutes=1)
+
+    async def collect_logs(self):
+        events = []
+        try:
+            handle = win32evtlog.OpenEventLog(None, self.log_type)
+            flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+            
+            events_data = win32evtlog.ReadEventLog(handle, flags, 0)
+            
+            for event_data in events_data:
+                timestamp = datetime.fromtimestamp(int(event_data.TimeGenerated))
+                
+                if timestamp <= self.last_read_time:
+                    continue
+                
+                event = Event(
+                    source=self.log_type,
+                    event_type=str(event_data.EventID),
+                    timestamp=timestamp,
+                    data={
+                        'EventID': event_data.EventID,
+                        'SourceName': event_data.SourceName,
+                        'Level': event_data.EventType,
+                        'Description': win32evtlogutil.SafeFormatMessage(event_data, self.log_type)
+                    },
+                    severity=self._map_event_type_to_severity(event_data.EventType)
+                )
+                events.append(event)
+            
+            self.last_read_time = datetime.now()
+            win32evtlog.CloseEventLog(handle)
+        except Exception as e:
+            logger.error(f"Error collecting Windows Event Logs: {e}")
+        
+        return events
+
+    def _map_event_type_to_severity(self, event_type):
+        severity_map = {
+            win32evtlog.EVENTLOG_ERROR_TYPE: 'HIGH',
+            win32evtlog.EVENTLOG_WARNING_TYPE: 'MEDIUM',
+            win32evtlog.EVENTLOG_INFORMATION_TYPE: 'LOW',
+            win32evtlog.EVENTLOG_AUDIT_SUCCESS: 'LOW',
+            win32evtlog.EVENTLOG_AUDIT_FAILURE: 'HIGH'
+        }
+        return severity_map.get(event_type, 'MEDIUM')
+
+class AsyncNetworkLogSource:
+    def __init__(self, interface='eth0'):
+        self.interface = interface
+        try:
+            self.pcap = pcapy.open_live(interface, 65536, True, 100)
+        except pcapy.PcapError as e:
+            logger.error(f"Error initializing pcapy: {e}")
+            self.pcap = None
+
+    async def collect_logs(self):
+        logs = []
+        if not self.pcap or not Ether:
+            logger.error("Pcapy or Scapy not properly initialized. Skipping network log collection.")
+            return logs
+
+        try:
+            def packet_callback(header, data):
+                try:
+                    packet = Ether(data)
+                    if IP in packet:
+                        log = {
+                            'timestamp': datetime.now(),
+                            'source_ip': packet[IP].src,
+                            'destination_ip': packet[IP].dst,
+                            'protocol': packet[IP].proto,
+                            'data': str(packet.summary())
+                        }
+                        logs.append(log)
+                except Exception as e:
+                    logger.error(f"Error processing packet: {e}")
+
+            self.pcap.loop(10, packet_callback)  
+        except Exception as e:
+            logger.error(f"Error collecting network logs: {e}")
+
+        return logs
+
+class AsyncWindowsSIEM:
+    def __init__(self, db_url='sqlite+aiosqlite:///siem.db'):
         self.log_sources = []
         self.rules = []
-        self.event_queue = queue.Queue()
-        self.db = Database(db_path)
+        self.db = AsyncDatabase(db_url)
         self.running = False
+
+    async def init(self):
+        await self.db.init()
 
     def add_log_source(self, log_source):
         self.log_sources.append(log_source)
@@ -257,93 +277,121 @@ class EnterpriseSTEM:
     def add_rule(self, rule):
         self.rules.append(rule)
 
-    def start(self):
+    async def start(self):
         self.running = True
-        collection_thread = threading.Thread(target=self._collect_logs)
-        analysis_thread = threading.Thread(target=self._analyze_events)
-        
-        collection_thread.start()
-        analysis_thread.start()
+        await asyncio.gather(
+            self._collect_logs(),
+            self._analyze_events()
+        )
 
     def stop(self):
         self.running = False
 
-    def _collect_logs(self):
+    async def _collect_logs(self):
         while self.running:
             for source in self.log_sources:
                 try:
-                    logs = source.collect_logs()
-                    for log in logs:
-                        parsed_log = source.parse_log(log)
-                        if parsed_log:
-                            event = Event(
-                                source=source.__class__.__name__,
-                                event_type=parsed_log.get('event_type', 'unknown'),
-                                timestamp=datetime.now(),
-                                data=parsed_log,
-                                severity=parsed_log.get('severity', 'MEDIUM')
-                            )
-                            self.event_queue.put(event)
+                    if isinstance(source, AsyncWindowsEventLogSource):
+                        events = await source.collect_logs()
+                        for event in events:
+                            await self._process_event(event)
+                    elif isinstance(source, AsyncNetworkLogSource):
+                        logs = await source.collect_logs()
+                        for log in logs:
+                            await self.db.store_network_log(log)
                 except Exception as e:
                     logger.error(f"Error collecting logs from {source.__class__.__name__}: {e}")
-            time.sleep(1)
+            await asyncio.sleep(1)
 
-    def _analyze_events(self):
-        while self.running:
-            try:
-                event = self.event_queue.get(timeout=1)
-                self._process_event(event)
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Error analyzing event: {e}")
-
-    def _process_event(self, event):
-        event_id = self.db.store_event(event)
+    async def _process_event(self, event):
+        event_id = await self.db.store_event(event)
         
         for rule in self.rules:
             try:
                 if rule.matches(event):
                     alert = Alert(rule, event)
-                    self.db.store_alert(alert, event_id)
-                    self._handle_alert(alert)
+                    alert_id = await self.db.store_alert(alert, event_id)
+                    await self._handle_alert(alert, alert_id)
             except Exception as e:
                 logger.error(f"Error processing rule {rule.name}: {e}")
 
-    def _handle_alert(self, alert):
+    async def _handle_alert(self, alert, alert_id):
         logger.warning(f"Alert generated: {alert.rule.name} - {alert.event.data}")
-        # Here you could add additional alert handlers:
-        # - Send email
-        # - Send to SIEM dashboard
-        # - Trigger automated response
+        # Implement real-time notification (e.g., WebSocket) here
 
-# Example usage
-def main():
-    siem = EnterpriseSTEM()
+# API routes
+async def get_events(request):
+    events = await request.app['siem'].db.get_recent_events()
+    return web.json_response(events)
 
-    # Add log sources
-    siem.add_log_source(FileLogSource('/var/log', r'.*\.log$'))
-    siem.add_log_source(WindowsEventLogSource())
-    siem.add_log_source(SyslogSource())
+async def get_alerts(request):
+    alerts = await request.app['siem'].db.get_recent_alerts()
+    return web.json_response(alerts)
 
-    # Add rules
-    siem.add_rule(SimpleRule('Failed Login', 'failed login attempt'))
-    siem.add_rule(SimpleRule('Firewall Block', 'blocked incoming connection'))
-    
-    # Complex rule example: Multiple failed logins from same IP
-    failed_login_conditions = [
-        ('event_type', 'equals', 'login_failure'),
-        ('data', 'contains', 'Failed login')
-    ]
-    siem.add_rule(ComplexRule('Brute Force Attempt', failed_login_conditions,timeframe=300, threshold=5))
+async def get_network_logs(request):
+    logs = await request.app['siem'].db.get_recent_network_logs()
+    return web.json_response(logs)
 
+async def update_alert(request):
+    alert_id = int(request.match_info['alert_id'])
+    data = await request.json()
+    status = data.get('status')
+    if status:
+        success = await request.app['siem'].db.update_alert_status(alert_id, status)
+        return web.json_response({'success': success})
+    return web.json_response({'success': False}, status=400)
+
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    request.app['websockets'].add(ws)
     try:
-        siem.start()
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        siem.stop()
-        logger.info("SIEM shutdown complete.")
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                # Handle incoming WebSocket messages if needed
+                pass
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                logger.error(f'WebSocket connection closed with exception {ws.exception()}')
+    finally:
+        request.app['websockets'].remove(ws)
+    return ws
 
-if __name__ == "__main__":
+async def start_background_tasks(app):
+    app['siem_task'] = asyncio.create_task(app['siem'].start())
+
+async def cleanup_background_tasks(app):
+    app['siem'].stop()
+    await app['siem_task']
+
+def main():
+    app = web.Application()
+    app['siem'] = AsyncWindowsSIEM()
+    app['websockets'] = set()
+
+    # Add Windows Event Log sources
+    app['siem'].add_log_source(AsyncWindowsEventLogSource('Security'))
+    app['siem'].add_log_source(AsyncWindowsEventLogSource('System'))
+    app['siem'].add_log_source(AsyncWindowsEventLogSource('Application'))
+    
+    # Add Network Log source
+    app['siem'].add_log_source(AsyncNetworkLogSource())
+
+    # Add Windows-specific rules
+    app['siem'].add_rule(WindowsEventRule('Failed Login', event_id=4625, severity='HIGH'))
+    app['siem'].add_rule(WindowsEventRule('Account Lockout', event_id=4740, severity='HIGH'))
+    app['siem'].add_rule(WindowsEventRule('Service Failed', event_id=7034, source='Service Control Manager', severity='MEDIUM'))
+    app['siem'].add_rule(WindowsEventRule('Windows Firewall Rule Modified', event_id=2004, source='Microsoft-Windows-Windows Firewall With Advanced Security', severity='MEDIUM'))
+
+    app.router.add_get('/api/events', get_events)
+    app.router.add_get('/api/alerts', get_alerts)
+    app.router.add_get('/api/network_logs', get_network_logs)
+    app.router.add_put('/api/alert/{alert_id}', update_alert)
+    app.router.add_get('/ws', websocket_handler)
+
+    app.on_startup.append(start_background_tasks)
+    app.on_cleanup.append(cleanup_background_tasks)
+
+    web.run_app(app)
+
+if __name__ == '__main__':
     main()
