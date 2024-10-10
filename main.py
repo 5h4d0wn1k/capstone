@@ -3,9 +3,8 @@ import aiohttp
 from aiohttp import web
 import aiojobs
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, select
 import win32evtlog
 import win32evtlogutil
 import win32con
@@ -13,8 +12,14 @@ import win32security
 import logging
 from datetime import datetime, timedelta
 import json
-import pcapy
-from scapy.all import *
+import os
+
+# Try to import pyshark, but provide a fallback if it's not available
+try:
+    import pyshark
+except ImportError:
+    print("WARNING: pyshark is not installed. Network capture will be disabled.")
+    pyshark = None
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -86,6 +91,16 @@ class EventModel(Base):
     data = Column(String)
     severity = Column(String)
 
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'source': self.source,
+            'event_type': self.event_type,
+            'timestamp': self.timestamp.isoformat(),
+            'data': self.data,
+            'severity': self.severity
+        }
+
 class AlertModel(Base):
     __tablename__ = 'alerts'
     id = Column(Integer, primary_key=True)
@@ -95,6 +110,16 @@ class AlertModel(Base):
     event_id = Column(Integer, ForeignKey('events.id'))
     status = Column(String, default='new')
 
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'rule_name': self.rule_name,
+            'severity': self.severity,
+            'timestamp': self.timestamp.isoformat(),
+            'event_id': self.event_id,
+            'status': self.status
+        }
+
 class NetworkLogModel(Base):
     __tablename__ = 'network_logs'
     id = Column(Integer, primary_key=True)
@@ -103,6 +128,16 @@ class NetworkLogModel(Base):
     destination_ip = Column(String)
     protocol = Column(String)
     data = Column(String)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'timestamp': self.timestamp.isoformat(),
+            'source_ip': self.source_ip,
+            'destination_ip': self.destination_ip,
+            'protocol': self.protocol,
+            'data': self.data
+        }
 
 class AsyncDatabase:
     def __init__(self, db_url):
@@ -178,39 +213,59 @@ class AsyncWindowsEventLogSource:
     def __init__(self, log_type='Security'):
         self.log_type = log_type
         self.last_read_time = datetime.now() - timedelta(minutes=1)
-
+        
     async def collect_logs(self):
         events = []
         try:
-            handle = win32evtlog.OpenEventLog(None, self.log_type)
+            # Try to get administrative privileges
+            handle = None
+            try:
+                handle = win32evtlog.OpenEventLog(None, self.log_type)
+            except win32evtlog.error as e:
+                if e.winerror == 1314:  # ERROR_PRIVILEGE_NOT_HELD
+                    logger.warning(f"Not enough privileges to open {self.log_type} log. Try running as administrator.")
+                    return events
+                raise
+
             flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
             
-            events_data = win32evtlog.ReadEventLog(handle, flags, 0)
+            try:
+                events_data = win32evtlog.ReadEventLog(handle, flags, 0)
+            except Exception as e:
+                logger.error(f"Error reading event log: {e}")
+                return events
             
             for event_data in events_data:
-                timestamp = datetime.fromtimestamp(int(event_data.TimeGenerated))
-                
-                if timestamp <= self.last_read_time:
+                try:
+                    # Convert pywintypes.datetime to Python datetime
+                    timestamp = datetime.fromtimestamp(int(event_data.TimeGenerated.timestamp()))
+                    
+                    if timestamp <= self.last_read_time:
+                        continue
+                    
+                    event = Event(
+                        source=self.log_type,
+                        event_type=str(event_data.EventID),
+                        timestamp=timestamp,
+                        data={
+                            'EventID': event_data.EventID,
+                            'SourceName': event_data.SourceName,
+                            'Level': event_data.EventType,
+                            'Description': win32evtlogutil.SafeFormatMessage(event_data, self.log_type)
+                        },
+                        severity=self._map_event_type_to_severity(event_data.EventType)
+                    )
+                    events.append(event)
+                except Exception as e:
+                    logger.error(f"Error processing event: {e}")
                     continue
-                
-                event = Event(
-                    source=self.log_type,
-                    event_type=str(event_data.EventID),
-                    timestamp=timestamp,
-                    data={
-                        'EventID': event_data.EventID,
-                        'SourceName': event_data.SourceName,
-                        'Level': event_data.EventType,
-                        'Description': win32evtlogutil.SafeFormatMessage(event_data, self.log_type)
-                    },
-                    severity=self._map_event_type_to_severity(event_data.EventType)
-                )
-                events.append(event)
             
             self.last_read_time = datetime.now()
-            win32evtlog.CloseEventLog(handle)
         except Exception as e:
             logger.error(f"Error collecting Windows Event Logs: {e}")
+        finally:
+            if handle:
+                win32evtlog.CloseEventLog(handle)
         
         return events
 
@@ -227,35 +282,31 @@ class AsyncWindowsEventLogSource:
 class AsyncNetworkLogSource:
     def __init__(self, interface='eth0'):
         self.interface = interface
-        try:
-            self.pcap = pcapy.open_live(interface, 65536, True, 100)
-        except pcapy.PcapError as e:
-            logger.error(f"Error initializing pcapy: {e}")
-            self.pcap = None
+        if pyshark is None:
+            logger.warning("pyshark is not available. Network capture is disabled.")
+        else:
+            try:
+                self.capture = pyshark.LiveCapture(interface=self.interface)
+            except Exception as e:
+                logger.error(f"Error initializing pyshark: {e}")
+                self.capture = None
 
     async def collect_logs(self):
         logs = []
-        if not self.pcap or not Ether:
-            logger.error("Pcapy or Scapy not properly initialized. Skipping network log collection.")
+        if pyshark is None or self.capture is None:
             return logs
 
         try:
-            def packet_callback(header, data):
-                try:
-                    packet = Ether(data)
-                    if IP in packet:
-                        log = {
-                            'timestamp': datetime.now(),
-                            'source_ip': packet[IP].src,
-                            'destination_ip': packet[IP].dst,
-                            'protocol': packet[IP].proto,
-                            'data': str(packet.summary())
-                        }
-                        logs.append(log)
-                except Exception as e:
-                    logger.error(f"Error processing packet: {e}")
-
-            self.pcap.loop(10, packet_callback)  
+            for packet in self.capture.sniff_continuously(packet_count=10):
+                log = {
+                    'timestamp': datetime.now(),
+                    'source_ip': packet.ip.src if hasattr(packet, 'ip') else 'N/A',
+                    'destination_ip': packet.ip.dst if hasattr(packet, 'ip') else 'N/A',
+                    'protocol': packet.transport_layer if hasattr(packet, 'transport_layer') else 'N/A',
+                    'data': str(packet)
+                }
+                logs.append(log)
+                await asyncio.sleep(0)  # Allow other tasks to run
         except Exception as e:
             logger.error(f"Error collecting network logs: {e}")
 
@@ -267,6 +318,7 @@ class AsyncWindowsSIEM:
         self.rules = []
         self.db = AsyncDatabase(db_url)
         self.running = False
+        self.app = None
 
     async def init(self):
         await self.db.init()
@@ -317,33 +369,56 @@ class AsyncWindowsSIEM:
 
     async def _handle_alert(self, alert, alert_id):
         logger.warning(f"Alert generated: {alert.rule.name} - {alert.event.data}")
-        # Implement real-time notification (e.g., WebSocket) here
+        if self.app:
+            await notify_clients(self.app, {'type': 'alert', 'alert': alert.to_dict()})
+
+    async def _analyze_events(self):
+        while self.running:
+            # Implement your event analysis logic here
+            # For example, you could periodically check for patterns in the events
+            await asyncio.sleep(60)  # Sleep for 60 seconds between analysis runs
 
 # API routes
 async def get_events(request):
-    events = await request.app['siem'].db.get_recent_events()
-    return web.json_response(events)
+    try:
+        events = await request.app['siem'].db.get_recent_events()
+        return web.json_response(events)
+    except Exception as e:
+        logger.error(f"Error fetching events: {e}")
+        return web.json_response({'error': 'Internal Server Error'}, status=500)
 
 async def get_alerts(request):
-    alerts = await request.app['siem'].db.get_recent_alerts()
-    return web.json_response(alerts)
+    try:
+        alerts = await request.app['siem'].db.get_recent_alerts()
+        return web.json_response(alerts)
+    except Exception as e:
+        logger.error(f"Error fetching alerts: {e}")
+        return web.json_response({'error': 'Internal Server Error'}, status=500)
 
 async def get_network_logs(request):
-    logs = await request.app['siem'].db.get_recent_network_logs()
-    return web.json_response(logs)
+    try:
+        logs = await request.app['siem'].db.get_recent_network_logs()
+        return web.json_response(logs)
+    except Exception as e:
+        logger.error(f"Error fetching network logs: {e}")
+        return web.json_response({'error': 'Internal Server Error'}, status=500)
 
 async def update_alert(request):
-    alert_id = int(request.match_info['alert_id'])
-    data = await request.json()
-    status = data.get('status')
-    if status:
-        success = await request.app['siem'].db.update_alert_status(alert_id, status)
-        return web.json_response({'success': success})
-    return web.json_response({'success': False}, status=400)
+    try:
+        alert_id = int(request.match_info['alert_id'])
+        data = await request.json()
+        status = data.get('status')
+        if status:
+            success = await request.app['siem'].db.update_alert_status(alert_id, status)
+            return web.json_response({'success': success})
+        return web.json_response({'success': False, 'error': 'Invalid status'}, status=400)
+    except Exception as e:
+        logger.error(f"Error updating alert: {e}")
+        return web.json_response({'error': 'Internal Server Error'}, status=500)
 
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
-    await ws.prepare(request)
+    await  ws.prepare(request)
     request.app['websockets'].add(ws)
     try:
         async for msg in ws:
@@ -356,6 +431,13 @@ async def websocket_handler(request):
         request.app['websockets'].remove(ws)
     return ws
 
+async def notify_clients(app, data):
+    for ws in app['websockets']:
+        try:
+            await ws.send_json(data)
+        except Exception as e:
+            logger.error(f"Error sending WebSocket message: {e}")
+
 async def start_background_tasks(app):
     app['siem_task'] = asyncio.create_task(app['siem'].start())
 
@@ -363,10 +445,14 @@ async def cleanup_background_tasks(app):
     app['siem'].stop()
     await app['siem_task']
 
+async def serve_dashboard(request):
+    return web.FileResponse('dashboard.html')
+
 def main():
     app = web.Application()
     app['siem'] = AsyncWindowsSIEM()
     app['websockets'] = set()
+    app['siem'].app = app
 
     # Add Windows Event Log sources
     app['siem'].add_log_source(AsyncWindowsEventLogSource('Security'))
@@ -382,6 +468,7 @@ def main():
     app['siem'].add_rule(WindowsEventRule('Service Failed', event_id=7034, source='Service Control Manager', severity='MEDIUM'))
     app['siem'].add_rule(WindowsEventRule('Windows Firewall Rule Modified', event_id=2004, source='Microsoft-Windows-Windows Firewall With Advanced Security', severity='MEDIUM'))
 
+    app.router.add_get('/', serve_dashboard)
     app.router.add_get('/api/events', get_events)
     app.router.add_get('/api/alerts', get_alerts)
     app.router.add_get('/api/network_logs', get_network_logs)
@@ -391,7 +478,7 @@ def main():
     app.on_startup.append(start_background_tasks)
     app.on_cleanup.append(cleanup_background_tasks)
 
-    web.run_app(app)
+    web.run_app(app, port=8081)
 
 if __name__ == '__main__':
     main()
