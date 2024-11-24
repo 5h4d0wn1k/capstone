@@ -1,0 +1,173 @@
+---
+# SIEM Configuration
+
+# General Settings
+general:
+  name: "Enterprise SIEM"
+  version: "1.0.0"
+  debug: true
+  log_level: "INFO"
+
+# Database Settings
+database:
+  type: "sqlite"  # sqlite, postgresql, mysql
+  path: "data/siem.db"
+  backup_interval: 86400  # 24 hours in seconds
+  retention_days: 90
+
+# Log Collection
+log_collection:
+  windows_events:
+    enabled: true
+    channels:
+      - "Security"
+      - "System"
+      - "Application"
+    interval: 10  # seconds
+  syslog:
+    enabled: true
+    port: 514
+    protocol: "UDP"  # UDP or TCP
+  custom_logs:
+    enabled: true
+    paths:
+      - "data/logs/*.log"
+    patterns:
+      - "ERROR"
+      - "CRITICAL"
+      - "WARNING"
+
+# Log Collection Configuration
+windows_logs:
+  channels:
+    - Security
+    - System
+    - Application
+  batch_size: 100
+  poll_interval: 5  # seconds
+
+syslog:
+  port: 5140  # Use non-privileged port
+  protocol: UDP  # UDP or TCP
+  buffer_size: 8192
+  max_connections: 10  # For TCP mode
+
+custom_logs:
+  paths:
+    - "C:/Program Files/Apache/logs/access.log"
+    - "C:/Program Files/Apache/logs/error.log"
+    - "C:/inetpub/logs/LogFiles/*/*.log"  # IIS logs
+  patterns:
+    - "ERROR"
+    - "CRITICAL"
+    - "ALERT"
+    - "EMERGENCY"
+    - "Failed password"
+    - "Invalid user"
+    - "authentication failure"
+
+# Network Monitoring
+network:
+  packet_capture:
+    enabled: true
+    interface: "any"
+    promiscuous: true
+    capture_filter: "not port 22"  # BPF filter
+  flow_analysis:
+    enabled: true
+    retention: 3600  # 1 hour in seconds
+  protocol_analysis:
+    enabled: true
+    ports:
+      - 80
+      - 443
+      - 53
+      - 3389
+
+# Threat Detection
+detection:
+  yara:
+    enabled: true
+    rules_path: "config/rules/yara"
+    scan_interval: 3600  # 1 hour in seconds
+  sigma:
+    enabled: true
+    rules_path: "config/rules/sigma"
+  machine_learning:
+    enabled: true
+    model_path: "config/models"
+    training_interval: 86400  # 24 hours in seconds
+
+# Incident Response
+response:
+  automation:
+    enabled: true
+    playbooks_path: "config/playbooks"
+  actions:
+    block_ip:
+      enabled: true
+      duration: 3600  # 1 hour in seconds
+    kill_process:
+      enabled: true
+    isolate_host:
+      enabled: true
+
+# Reporting
+reporting:
+  metrics:
+    enabled: true
+    interval: 300  # 5 minutes in seconds
+  alerts:
+    enabled: true
+    email:
+      enabled: true
+      smtp_server: "smtp.example.com"
+      smtp_port: 587
+      from_address: "siem@example.com"
+      to_address: "security@example.com"
+  reports:
+    enabled: true
+    interval: 86400  # 24 hours in seconds
+    formats:
+      - "PDF"
+      - "HTML"
+      - "CSV"
+
+# Web Interface
+web:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  ssl:
+    enabled: true
+    cert_path: "config/ssl/cert.pem"
+    key_path: "config/ssl/key.pem"
+  authentication:
+    enabled: true
+    method: "local"  # local, ldap, oauth2
+    session_timeout: 3600  # 1 hour in seconds
+
+# Integrations
+integrations:
+  elasticsearch:
+    enabled: false
+    host: "localhost"
+    port: 9200
+  splunk:
+    enabled: false
+    host: "localhost"
+    port: 8089
+  slack:
+    enabled: false
+    webhook_url: ""
+  jira:
+    enabled: false
+    url: ""
+    project: ""
+
+# Performance
+performance:
+  max_threads: 10
+  queue_size: 1000
+  batch_size: 100
+  memory_limit: 1024  # MB

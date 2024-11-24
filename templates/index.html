@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIEM Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .card {
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-active {
+            background-color: #28a745;
+        }
+        .status-inactive {
+            background-color: #dc3545;
+        }
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .log-entry {
+            font-family: monospace;
+            font-size: 14px;
+            padding: 8px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .log-entry:hover {
+            background-color: #f8f9fa;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">SIEM Dashboard</a>
+            <div class="navbar-text text-light">
+                <span id="current-time"></span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <!-- Component Status -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Component Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="component-status"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- System Metrics -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">System Metrics</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-6 text-center">
+                                <p class="mb-1">CPU Usage</p>
+                                <div class="metric-value" id="cpu-usage">0%</div>
+                            </div>
+                            <div class="col-6 text-center">
+                                <p class="mb-1">Memory Usage</p>
+                                <div class="metric-value" id="memory-usage">0%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Alert Summary -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Alert Summary</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-4 text-center">
+                                <p class="mb-1">Critical</p>
+                                <div class="metric-value text-danger" id="critical-alerts">0</div>
+                            </div>
+                            <div class="col-4 text-center">
+                                <p class="mb-1">Warning</p>
+                                <div class="metric-value text-warning" id="warning-alerts">0</div>
+                            </div>
+                            <div class="col-4 text-center">
+                                <p class="mb-1">Info</p>
+                                <div class="metric-value text-info" id="info-alerts">0</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <!-- Event Log -->
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Event Log</h5>
+                    </div>
+                    <div class="card-body p-0">
+                        <div id="event-log" style="height: 400px; overflow-y: auto;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Security Metrics -->
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Security Metrics</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="security-metrics"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        // Connect to SocketIO
+        const socket = io();
+
+        // Update current time
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('current-time').textContent = now.toLocaleString();
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+
+        // Update component status
+        socket.on('component_status', function(data) {
+            const statusDiv = document.getElementById('component-status');
+            statusDiv.innerHTML = '';
+            
+            for (const [component, status] of Object.entries(data)) {
+                const statusHtml = `
+                    <div class="mb-2">
+                        <span class="status-indicator ${status ? 'status-active' : 'status-inactive'}"></span>
+                        ${component.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                    </div>
+                `;
+                statusDiv.innerHTML += statusHtml;
+            }
+        });
+
+        // Update system metrics
+        socket.on('system_metrics', function(data) {
+            document.getElementById('cpu-usage').textContent = `${data.cpu_percent}%`;
+            document.getElementById('memory-usage').textContent = `${data.memory_percent}%`;
+        });
+
+        // Update alert counts
+        socket.on('alert_summary', function(data) {
+            document.getElementById('critical-alerts').textContent = data.critical || 0;
+            document.getElementById('warning-alerts').textContent = data.warning || 0;
+            document.getElementById('info-alerts').textContent = data.info || 0;
+        });
+
+        // Update event log
+        socket.on('event_log', function(data) {
+            const logDiv = document.getElementById('event-log');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.textContent = `[${new Date(data.timestamp).toLocaleString()}] ${data.message}`;
+            logDiv.insertBefore(entry, logDiv.firstChild);
+            
+            // Keep only last 100 entries
+            while (logDiv.children.length > 100) {
+                logDiv.removeChild(logDiv.lastChild);
+            }
+        });
+
+        // Update security metrics
+        socket.on('security_metrics', function(data) {
+            const metricsDiv = document.getElementById('security-metrics');
+            metricsDiv.innerHTML = '';
+            
+            for (const [metric, value] of Object.entries(data)) {
+                const metricHtml = `
+                    <div class="mb-3">
+                        <p class="mb-1">${metric.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</p>
+                        <h4 class="mb-0">${value}</h4>
+                    </div>
+                `;
+                metricsDiv.innerHTML += metricHtml;
+            }
+        });
+    </script>
+</body>
+</html>

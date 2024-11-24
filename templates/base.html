@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIEM Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js for real-time graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Socket.IO for real-time updates -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <!-- Custom styles -->
+    <style>
+        .metric-card {
+            @apply bg-white rounded-lg shadow-md p-4 hover:shadow-lg transition-shadow duration-200;
+        }
+        .alert-critical {
+            @apply bg-red-100 border-l-4 border-red-500 text-red-700;
+        }
+        .alert-warning {
+            @apply bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700;
+        }
+        .alert-info {
+            @apply bg-blue-100 border-l-4 border-blue-500 text-blue-700;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <nav class="bg-gray-800 text-white">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <span class="text-xl font-bold">SIEM Dashboard</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="connection-status" class="text-sm">
+                        Status: <span class="text-green-400">Connected</span>
+                    </span>
+                    <span id="last-update" class="text-sm">
+                        Last Update: <span>Never</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Common JavaScript -->
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+
+        // Update connection status
+        socket.on('connect', () => {
+            document.querySelector('#connection-status span').textContent = 'Connected';
+            document.querySelector('#connection-status span').className = 'text-green-400';
+        });
+
+        socket.on('disconnect', () => {
+            document.querySelector('#connection-status span').textContent = 'Disconnected';
+            document.querySelector('#connection-status span').className = 'text-red-400';
+        });
+
+        // Update timestamp on any update
+        function updateTimestamp() {
+            const now = new Date();
+            document.querySelector('#last-update span').textContent = now.toLocaleTimeString();
+        }
+
+        socket.on('metrics_update', updateTimestamp);
+        socket.on('event_update', updateTimestamp);
+        socket.on('status_update', updateTimestamp);
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

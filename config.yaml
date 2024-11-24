@@ -1,0 +1,107 @@
+siem:
+  log_sources:
+    - name: system_logs
+      path: C:\\Windows\\System32\\winevt\\Logs\\System.evtx
+      type: syslog
+    - name: system_logs
+      path: C:\\Windows\\System32\\winevt\\Logs\\Application.evtx
+      type: syslog
+    - name: auth_logs
+      path: C:\\Windows\\System32\\winevt\\Logs\\Security.evtx
+      type: auth
+    - name: apache_logs
+      path: C:\\xampp\\apache\\logs\\access.log
+      type: web
+    - name: apache_logs
+      path: C:\\xampp\\apache\\logs\\error.log
+      type: web
+
+monitoring:
+  interval: 5  # seconds
+  retention_period: 30  # days
+  collection_interval: 5  # seconds
+  history_size: 1000
+  thresholds:
+    cpu_percent: 80.0
+    memory_percent: 85.0
+    disk_percent: 90.0
+    failed_login_attempts: 5
+    cpu_usage: 90
+    memory_usage: 85
+    disk_usage: 90
+  critical_files:
+    - "C:\\Windows\\System32\\config"
+    - "C:\\Windows\\System32\\drivers"
+    - "C:\\Program Files"
+    - "C:\\Program Files (x86)"
+
+alerts:
+  email:
+    smtp_server: smtp.gmail.com
+    smtp_port: 587
+    sender_email: your-email@example.com
+  
+  thresholds:
+    failed_login_attempts: 5
+    cpu_usage: 90
+    memory_usage: 85
+    disk_usage: 90
+
+offensive_tools:
+  port_scan:
+    timeout: 3
+    default_ports: [20, 21, 22, 23, 25, 53, 80, 443, 445, 3389]
+    num_workers: 5
+    scan_options:
+      ports: "1-1024"
+      arguments: "-sV -sC -O --version-intensity 5"
+      timeout: 300
+    default_credentials:
+      - username: "admin"
+        password: "admin"
+      - username: "root"
+        password: "root"
+      - username: "test"
+        password: "test"
+
+defensive_tools:
+  firewall:
+    enabled: true
+    default_rules:
+      - action: block
+        port: 22
+        source: any
+  
+  ids:
+    enabled: true
+    rules_path: rules/ids_rules.yaml
+    sensitivity: medium
+    monitor_interval: 5  # seconds
+    thresholds:
+      max_connections: 100
+      max_failed_logins: 5
+      connection_rate: 50
+      suspicious_ports:
+        - 22    # SSH
+        - 3389  # RDP
+        - 445   # SMB
+    blacklist_file: "blacklist.txt"
+    critical_files:
+      - "C:\\Windows\\System32\\config"
+      - "C:\\Windows\\System32\\drivers"
+      - "C:\\Program Files"
+
+database:
+  type: sqlite
+  path: db/siem.db
+
+api:
+  host: 0.0.0.0
+  port: 5000
+  debug: false
+  secret_key: CHANGE_THIS_TO_SECURE_KEY
+
+logging:
+  level: "INFO"
+  rotation: "500 MB"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
