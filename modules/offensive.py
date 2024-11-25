@@ -6,10 +6,42 @@ from queue import Queue
 from loguru import logger
 import requests
 import concurrent.futures
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import platform
 import subprocess
 import os
+import json
+from datetime import datetime, timedelta
+
+# Optional imports
+try:
+    import yara
+    YARA_AVAILABLE = True
+except ImportError:
+    logger.warning("Yara module not available. Some features will be disabled.")
+    YARA_AVAILABLE = False
+
+try:
+    from virustotal_api import VirusTotal
+    VT_AVAILABLE = True
+except ImportError:
+    logger.warning("VirusTotal API not available. Some features will be disabled.")
+    VT_AVAILABLE = False
+
+try:
+    from elasticsearch import Elasticsearch
+    ES_AVAILABLE = True
+except ImportError:
+    logger.warning("Elasticsearch not available. Some features will be disabled.")
+    ES_AVAILABLE = False
+
+try:
+    import pandas as pd
+    from sklearn.ensemble import IsolationForest
+    ML_AVAILABLE = True
+except ImportError:
+    logger.warning("Machine learning modules not available. Some features will be disabled.")
+    ML_AVAILABLE = False
 
 class OffensiveTools:
     def __init__(self, config: Dict):
@@ -19,34 +51,274 @@ class OffensiveTools:
         self.workers = []
         self.max_workers = config.get('num_workers', 5)
         self.running = False
+        self.es_client = None
+        self.vt_client = None
+        self.yara_rules = {}
+        self.ml_models = {}
+        self.initialize_components()
+        
+    def initialize_components(self):
+        """Initialize all offensive security components"""
         self.initialize_scanner()
+        self.initialize_threat_intel()
+        self.initialize_ml_models()
+        if YARA_AVAILABLE:
+            self.initialize_yara_rules()
+        self.initialize_vulnerability_scanner()
         
     def initialize_scanner(self):
-        """Initialize network scanner with fallback options"""
+        """Initialize enhanced network scanner"""
         try:
             self.nm = nmap.PortScanner()
-            logger.info("Nmap scanner initialized successfully")
+            # Enable advanced scanning features
+            self.nm.scan_techniques = ['-sS', '-sV', '-sC', '-A']
+            logger.info("Nmap scanner initialized with advanced features")
         except Exception as e:
             logger.warning(f"Nmap not available: {e}. Using fallback scanning method.")
             self.nm = None
+
+    def initialize_threat_intel(self):
+        """Initialize threat intelligence components"""
+        try:
+            # Initialize VirusTotal API
+            vt_api_key = self.config.get('virustotal_api_key')
+            if vt_api_key and VT_AVAILABLE:
+                self.vt_client = VirusTotal(vt_api_key)
             
-        # Initialize additional scanning capabilities
-        self.initialize_ssl_scanner()
-        self.initialize_credential_checker()
+            # Initialize Elasticsearch for threat intel storage
+            es_config = self.config.get('elasticsearch', {})
+            if es_config and ES_AVAILABLE:
+                self.es_client = Elasticsearch([es_config['host']], 
+                                            http_auth=(es_config['user'], es_config['password']))
+        except Exception as e:
+            logger.error(f"Failed to initialize threat intel components: {e}")
+
+    def initialize_ml_models(self):
+        """Initialize machine learning models for threat detection"""
+        try:
+            # Initialize anomaly detection model
+            if ML_AVAILABLE:
+                self.ml_models['anomaly_detector'] = IsolationForest(
+                    contamination=0.1,
+                    random_state=42
+                )
+            
+            # Load pre-trained models if available
+            model_path = self.config.get('ml_models_path')
+            if model_path and os.path.exists(model_path) and ML_AVAILABLE:
+                self.load_pretrained_models(model_path)
+        except Exception as e:
+            logger.error(f"Failed to initialize ML models: {e}")
+
+    def initialize_yara_rules(self):
+        """Initialize YARA rules for malware detection"""
+        try:
+            rules_path = self.config.get('yara_rules_path')
+            if rules_path and os.path.exists(rules_path):
+                for rule_file in os.listdir(rules_path):
+                    if rule_file.endswith('.yar'):
+                        rule_path = os.path.join(rules_path, rule_file)
+                        self.yara_rules[rule_file] = yara.compile(rule_path)
+        except Exception as e:
+            logger.error(f"Failed to initialize YARA rules: {e}")
+
+    def advanced_scan(self, target: str, scan_type: str = 'full') -> Dict:
+        """Perform advanced scanning with multiple techniques"""
+        results = {
+            'timestamp': datetime.now().isoformat(),
+            'target': target,
+            'scan_type': scan_type,
+            'findings': []
+        }
         
-    def initialize_ssl_scanner(self):
-        """Initialize SSL/TLS scanner"""
-        self.ssl_context = ssl.create_default_context()
-        self.ssl_context.check_hostname = False
-        self.ssl_context.verify_mode = ssl.CERT_NONE
+        try:
+            if scan_type == 'full' or scan_type == 'network':
+                results['network_scan'] = self.perform_network_scan(target)
+            
+            if scan_type == 'full' or scan_type == 'vulnerability':
+                results['vulnerability_scan'] = self.perform_vulnerability_scan(target)
+            
+            if scan_type == 'full' or scan_type == 'malware':
+                results['malware_scan'] = self.perform_malware_scan(target)
+            
+            # Enrich results with threat intelligence
+            results['threat_intel'] = self.enrich_with_threat_intel(results)
+            
+            # Analyze results with ML models
+            if ML_AVAILABLE:
+                results['ml_analysis'] = self.analyze_with_ml(results)
+            
+            # Store results in Elasticsearch
+            if self.es_client:
+                self.store_scan_results(results)
+                
+        except Exception as e:
+            logger.error(f"Advanced scan failed: {e}")
+            results['error'] = str(e)
+            
+        return results
+
+    def perform_network_scan(self, target: str) -> Dict:
+        """Perform comprehensive network scan"""
+        results = {}
+        if self.nm:
+            try:
+                # Perform comprehensive network scan
+                self.nm.scan(target, arguments='-sS -sV -sC -A -p-')
+                results = self.nm.analyse_nmap_xml_scan()
+                
+                # Additional custom port scanning
+                results['custom_ports'] = self.scan_custom_ports(target)
+            except Exception as e:
+                logger.error(f"Network scan failed: {e}")
+                results['error'] = str(e)
+        return results
+
+    def perform_vulnerability_scan(self, target: str) -> Dict:
+        """Perform vulnerability assessment"""
+        results = {
+            'vulnerabilities': [],
+            'risk_score': 0,
+            'recommendations': []
+        }
         
-    def initialize_credential_checker(self):
-        """Initialize default credential checker"""
-        self.default_credentials = self.config.get('default_credentials', [
-            {'username': 'admin', 'password': 'admin'},
-            {'username': 'root', 'password': 'root'}
-        ])
+        try:
+            # Implement various vulnerability checks
+            results['vulnerabilities'].extend(self.check_common_vulnerabilities(target))
+            results['vulnerabilities'].extend(self.check_misconfigurations(target))
+            results['vulnerabilities'].extend(self.check_default_credentials(target))
+            
+            # Calculate risk score
+            results['risk_score'] = self.calculate_risk_score(results['vulnerabilities'])
+            
+            # Generate recommendations
+            results['recommendations'] = self.generate_recommendations(results['vulnerabilities'])
+        except Exception as e:
+            logger.error(f"Vulnerability scan failed: {e}")
+            results['error'] = str(e)
+            
+        return results
+
+    def perform_malware_scan(self, target: str) -> Dict:
+        """Perform malware and suspicious behavior detection"""
+        results = {
+            'malware_detected': [],
+            'suspicious_behaviors': [],
+            'yara_matches': []
+        }
         
+        try:
+            # Scan with YARA rules
+            if YARA_AVAILABLE and self.yara_rules:
+                for rule_name, rule in self.yara_rules.items():
+                    matches = rule.match(target)
+                    if matches:
+                        results['yara_matches'].extend(matches)
+            
+            # Check for suspicious behaviors
+            results['suspicious_behaviors'] = self.detect_suspicious_behaviors(target)
+            
+            # Scan with VirusTotal if available
+            if self.vt_client:
+                vt_results = self.scan_with_virustotal(target)
+                results['virustotal'] = vt_results
+                
+        except Exception as e:
+            logger.error(f"Malware scan failed: {e}")
+            results['error'] = str(e)
+            
+        return results
+
+    def analyze_with_ml(self, data: Dict) -> Dict:
+        """Analyze scan results using machine learning models"""
+        analysis_results = {
+            'anomalies': [],
+            'threat_score': 0,
+            'predictions': {}
+        }
+        
+        try:
+            # Prepare features for ML analysis
+            features = self.extract_features(data)
+            
+            # Perform anomaly detection
+            if 'anomaly_detector' in self.ml_models:
+                predictions = self.ml_models['anomaly_detector'].predict(features)
+                analysis_results['anomalies'] = self.process_anomalies(predictions, data)
+            
+            # Calculate threat score
+            analysis_results['threat_score'] = self.calculate_threat_score(analysis_results['anomalies'])
+            
+        except Exception as e:
+            logger.error(f"ML analysis failed: {e}")
+            analysis_results['error'] = str(e)
+            
+        return analysis_results
+
+    def store_scan_results(self, results: Dict):
+        """Store scan results in Elasticsearch"""
+        try:
+            if self.es_client:
+                index_name = f"siem-offensive-{datetime.now().strftime('%Y.%m')}"
+                self.es_client.index(
+                    index=index_name,
+                    body=results
+                )
+        except Exception as e:
+            logger.error(f"Failed to store results in Elasticsearch: {e}")
+
+    def start_scan_workers(self):
+        """Start worker threads for scanning"""
+        for _ in range(self.max_workers):
+            worker = threading.Thread(target=self._scan_worker, daemon=True)
+            worker.start()
+            self.workers.append(worker)
+            
+    def _scan_worker(self):
+        """Worker thread for scanning targets"""
+        while True:
+            try:
+                target = self.scan_queue.get()
+                if target is None:
+                    break
+                    
+                results = self.scan_host(target)
+                self.results_queue.put(results)
+                
+            except Exception as e:
+                logger.error(f"Worker error: {e}")
+            finally:
+                self.scan_queue.task_done()
+                
+    def stop_workers(self):
+        """Stop all worker threads"""
+        for _ in self.workers:
+            self.scan_queue.put(None)
+        for worker in self.workers:
+            worker.join()
+        self.workers = []
+
+    def start(self):
+        """Start offensive tools and scanning"""
+        logger.info("Starting offensive tools")
+        self.running = True
+        
+        # Start worker threads
+        for _ in range(self.max_workers):
+            worker = threading.Thread(target=self._scan_worker, daemon=True)
+            worker.start()
+            self.workers.append(worker)
+            
+    def stop(self):
+        """Stop offensive tools and scanning"""
+        logger.info("Stopping offensive tools")
+        self.running = False
+        
+        # Wait for workers to finish
+        for worker in self.workers:
+            worker.join(timeout=5)
+        self.workers.clear()
+
     def scan_host(self, target: str, ports: str = None) -> Dict:
         """Scan a host using available methods"""
         results = {'target': target, 'ports': {}, 'vulnerabilities': []}
@@ -153,55 +425,3 @@ class OffensiveTools:
             else:
                 port_list.append(int(part))
         return port_list
-    
-    def start_scan_workers(self):
-        """Start worker threads for scanning"""
-        for _ in range(self.max_workers):
-            worker = threading.Thread(target=self._scan_worker, daemon=True)
-            worker.start()
-            self.workers.append(worker)
-            
-    def _scan_worker(self):
-        """Worker thread for scanning targets"""
-        while True:
-            try:
-                target = self.scan_queue.get()
-                if target is None:
-                    break
-                    
-                results = self.scan_host(target)
-                self.results_queue.put(results)
-                
-            except Exception as e:
-                logger.error(f"Worker error: {e}")
-            finally:
-                self.scan_queue.task_done()
-                
-    def stop_workers(self):
-        """Stop all worker threads"""
-        for _ in self.workers:
-            self.scan_queue.put(None)
-        for worker in self.workers:
-            worker.join()
-        self.workers = []
-
-    def start(self):
-        """Start offensive tools and scanning"""
-        logger.info("Starting offensive tools")
-        self.running = True
-        
-        # Start worker threads
-        for _ in range(self.max_workers):
-            worker = threading.Thread(target=self._scan_worker, daemon=True)
-            worker.start()
-            self.workers.append(worker)
-            
-    def stop(self):
-        """Stop offensive tools and scanning"""
-        logger.info("Stopping offensive tools")
-        self.running = False
-        
-        # Wait for workers to finish
-        for worker in self.workers:
-            worker.join(timeout=5)
-        self.workers.clear()

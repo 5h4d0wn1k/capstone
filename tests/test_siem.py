@@ -216,5 +216,90 @@ class TestSIEM(unittest.TestCase):
         if os.path.exists(cls.test_dir):
             os.rmdir(cls.test_dir)
 
+class TestOffensiveTools(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Set up test environment for offensive tools"""
+        cls.config = {
+            'num_workers': 2,
+            'scan_timeout': 30,
+            'target_ports': [80, 443, 22],
+            'vulnerability_db': 'test_vuln.db'
+        }
+        
+    def setUp(self):
+        """Initialize offensive tools for each test"""
+        self.offensive = OffensiveTools(self.config)
+        
+    def test_scanner_initialization(self):
+        """Test network scanner initialization"""
+        self.assertIsNotNone(self.offensive.nm)
+        self.assertTrue(hasattr(self.offensive.nm, 'scan_techniques'))
+        logger.info("✓ Scanner initialization test passed")
+        
+    def test_vulnerability_scanner(self):
+        """Test vulnerability scanner functionality"""
+        # Test with a known safe target
+        result = self.offensive.scan_target('127.0.0.1', ports=[80])
+        self.assertIsInstance(result, dict)
+        self.assertIn('scan_time', result)
+        logger.info("✓ Vulnerability scanner test passed")
+        
+    def test_threat_intel(self):
+        """Test threat intelligence components"""
+        self.offensive.initialize_threat_intel()
+        # Test IP reputation check
+        rep = self.offensive.check_ip_reputation('8.8.8.8')
+        self.assertIsInstance(rep, dict)
+        logger.info("✓ Threat intelligence test passed")
+
+class TestDefensiveTools(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Set up test environment for defensive tools"""
+        cls.config = {
+            'monitor_interval': 1,
+            'log_dir': 'test_logs',
+            'alert_threshold': 5
+        }
+        
+    def setUp(self):
+        """Initialize defensive tools for each test"""
+        self.defensive = DefensiveTools(self.config)
+        
+    def test_ids_initialization(self):
+        """Test IDS initialization"""
+        self.defensive.initialize_ids()
+        self.assertTrue(hasattr(self.defensive, 'event_queue'))
+        self.assertTrue(hasattr(self.defensive, 'alert_queue'))
+        logger.info("✓ IDS initialization test passed")
+        
+    def test_threat_detection(self):
+        """Test threat detection capabilities"""
+        # Simulate a suspicious event
+        event = {
+            'timestamp': datetime.now().isoformat(),
+            'source_ip': '192.168.1.100',
+            'dest_ip': '192.168.1.1',
+            'port': 445,
+            'protocol': 'TCP',
+            'flags': ['SYN']
+        }
+        threat_level = self.defensive.analyze_threat(event)
+        self.assertIsInstance(threat_level, (int, float))
+        self.assertTrue(0 <= threat_level <= 100)
+        logger.info("✓ Threat detection test passed")
+        
+    def test_monitoring(self):
+        """Test system monitoring capabilities"""
+        self.defensive.start_monitoring()
+        time.sleep(2)  # Give time for monitoring to collect data
+        metrics = self.defensive.get_system_metrics()
+        self.assertIsInstance(metrics, dict)
+        self.assertIn('cpu_usage', metrics)
+        self.assertIn('memory_usage', metrics)
+        self.defensive.stop_monitoring()
+        logger.info("✓ System monitoring test passed")
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -1,67 +1,86 @@
 #!/usr/bin/env python3
+"""SIEM System Runner
 
-import os
-import sys
+This script initializes and runs the SIEM system with the web interface.
+"""
+
 import yaml
-import logging
+import argparse
+import sys
+import os
 from loguru import logger
-import signal
-import time
+from siem.siem import SIEM
 
-def setup_logging():
-    """Configure logging with both file and console output"""
-    # Create logs directory if it doesn't exist
-    if not os.path.exists('logs'):
-        os.makedirs('logs')
+def load_config(config_path: str) -> dict:
+    """Load configuration from YAML file.
     
-    logger.add(
-        "logs/siem.log",
-        rotation="500 MB",
-        retention="10 days",
-        level="INFO",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
-    )
-
-def load_config():
-    """Load SIEM configuration from config.yaml"""
+    Args:
+        config_path: Path to configuration file
+        
+    Returns:
+        Configuration dictionary
+    """
     try:
-        with open('config.yaml', 'r') as f:
+        with open(config_path, 'r') as f:
             return yaml.safe_load(f)
     except Exception as e:
-        logger.error(f"Failed to load config: {e}")
+        logger.error(f"Failed to load configuration from {config_path}: {e}")
         sys.exit(1)
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully"""
-    logger.info("Shutdown signal received. Stopping SIEM...")
-    if 'siem' in globals():
-        siem.shutdown()
-    sys.exit(0)
 
 def main():
-    # Setup signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description="SIEM System Runner")
+    parser.add_argument(
+        "-c", "--config",
+        default="config.yaml",
+        help="Path to configuration file"
+    )
+    parser.add_argument(
+        "-d", "--debug",
+        action="store_true",
+        help="Enable debug mode"
+    )
+    args = parser.parse_args()
+
+    # Configure logging
+    logger.remove()  # Remove default handler
+    log_format = (
+        "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+        "<level>{level: <8}</level> | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+        "<level>{message}</level>"
+    )
     
-    # Initialize logging
-    setup_logging()
-    logger.info("Starting SIEM system...")
-    
+    if args.debug:
+        logger.add(sys.stderr, format=log_format, level="DEBUG")
+        logger.add("logs/debug.log", format=log_format, level="DEBUG", rotation="1 day")
+    else:
+        logger.add(sys.stderr, format=log_format, level="INFO")
+        logger.add("logs/siem.log", format=log_format, level="INFO", rotation="1 day")
+
+    # Create logs directory if it doesn't exist
+    os.makedirs("logs", exist_ok=True)
+
     # Load configuration
-    config = load_config()
-    
+    config = load_config(args.config)
+    logger.info(f"Loaded configuration from {args.config}")
+
     try:
-        # Import SIEM after logging is setup
-        from siem import SIEM
-        global siem
+        # Initialize SIEM system
         siem = SIEM(config)
-        
-        # Start SIEM
-        siem.run(debug=False)
-        
+        logger.info("Initialized SIEM system")
+
+        # Run SIEM system
+        logger.info("Starting SIEM system...")
+        siem.run(debug=args.debug)
+
+    except KeyboardInterrupt:
+        logger.info("Received shutdown signal")
+        siem.shutdown()
+        logger.info("SIEM system stopped")
     except Exception as e:
-        logger.error(f"Failed to start SIEM: {e}")
+        logger.error(f"SIEM system error: {e}")
         sys.exit(1)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
