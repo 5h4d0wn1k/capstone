@@ -1,0 +1,37 @@
+groups:
+- name: SIEM Alerts
+  rules:
+  - alert: HighThreatLevel
+    expr: siem_threat_level > 0.8
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: High threat level detected
+      description: System threat level has been above 0.8 for 5 minutes
+
+  - alert: SystemUnhealthy
+    expr: siem_system_health < 70
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: System health is degraded
+      description: System health has been below 70% for 5 minutes
+
+  - alert: HighEventRate
+    expr: rate(siem_events_total[5m]) > 1000
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: High event rate detected
+      description: Event rate is above 1000 events per second
+
+  - alert: MalwareDetected
+    expr: increase(siem_malware_detected_total[5m]) > 0
+    labels:
+      severity: critical
+    annotations:
+      summary: New malware detected
+      description: New malware has been detected in the last 5 minutes

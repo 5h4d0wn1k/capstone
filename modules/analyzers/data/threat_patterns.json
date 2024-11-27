@@ -1,0 +1,43 @@
+[
+  {
+    "id": "BRUTE_FORCE",
+    "name": "Brute Force Attack",
+    "description": "Multiple failed login attempts",
+    "conditions": {
+      "event_type": "FAILED_LOGIN_ATTEMPT",
+      "threshold": 5,
+      "timeframe": 300
+    },
+    "severity": "high",
+    "score": 80
+  },
+  {
+    "id": "PRIVILEGE_ESCALATION",
+    "name": "Privilege Escalation",
+    "description": "Suspicious privilege elevation activities",
+    "conditions": {
+      "event_types": [
+        "SPECIAL_PRIVILEGES_LOGON",
+        "AUDIT_POLICY_CHANGE"
+      ],
+      "timeframe": 600
+    },
+    "severity": "critical",
+    "score": 90
+  },
+  {
+    "id": "SYSTEM_ABUSE",
+    "name": "System Resource Abuse",
+    "description": "Sustained high resource usage",
+    "conditions": {
+      "event_types": [
+        "HIGH_CPU_USAGE",
+        "HIGH_MEMORY_USAGE"
+      ],
+      "threshold": 3,
+      "timeframe": 900
+    },
+    "severity": "medium",
+    "score": 60
+  }
+]

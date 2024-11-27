@@ -1,112 +1,168 @@
-#!/usr/bin/env python3
+"""Process monitoring implementation."""
 
-import os
 import psutil
 import threading
 import time
 from datetime import datetime
+from typing import Dict, Any, List, Optional
 from loguru import logger
 
 class ProcessMonitor:
-    """Monitor system processes and detect suspicious activity."""
+    """Process monitoring and analysis."""
     
-    def __init__(self):
-        """Initialize process monitor."""
-        self.running = False
-        self.process_list = {}
-        self.monitor_thread = None
-        self.suspicious_processes = []
-        
-    def start(self):
-        """Start process monitoring."""
-        if not self.running:
-            self.running = True
-            self.monitor_thread = threading.Thread(target=self._monitor_processes)
-            self.monitor_thread.daemon = True
-            self.monitor_thread.start()
-            logger.info("Process monitor started")
-            
-    def stop(self):
-        """Stop process monitoring."""
-        self.running = False
-        if self.monitor_thread:
-            self.monitor_thread.join(timeout=5)
-        logger.info("Process monitor stopped")
-        
-    def _monitor_processes(self):
-        """Monitor processes continuously."""
-        while self.running:
-            try:
-                for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
-                    process_info = proc.info
-                    pid = process_info['pid']
-                    
-                    # Add network connections if available
-                    try:
-                        connections = proc.connections()
-                        process_info['connections'] = [
-                            {
-                                'local_ip': conn.laddr.ip if conn.laddr else None,
-                                'local_port': conn.laddr.port if conn.laddr else None,
-                                'remote_ip': conn.raddr.ip if conn.raddr else None,
-                                'remote_port': conn.raddr.port if conn.raddr else None,
-                                'status': conn.status
-                            }
-                            for conn in connections
-                        ]
-                    except (psutil.AccessDenied, psutil.NoSuchProcess):
-                        process_info['connections'] = []
-                        
-                    # Check if process is suspicious
-                    if self.is_suspicious_process(process_info):
-                        if pid not in self.suspicious_processes:
-                            self.suspicious_processes.append(pid)
-                            logger.warning(f"Suspicious process detected: {process_info['name']} (PID: {pid})")
-                            
-                    self.process_list[pid] = process_info
-                    
-            except Exception as e:
-                logger.error(f"Error monitoring processes: {e}")
-                
-            time.sleep(1)  # Update every second
-            
-    def get_processes(self):
-        """Get current process list."""
-        return list(self.process_list.values())
-        
-    def is_suspicious_process(self, process):
-        """
-        Check if a process is suspicious based on various indicators.
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize monitor.
         
         Args:
-            process (dict): Process information dictionary
+            config: Monitor configuration
+        """
+        self.config = config.get('process_monitor', {})
+        self.enabled = self.config.get('enabled', True)
+        self.monitor_interval = self.config.get('monitor_interval', 60)  # 1 minute
+        self.cpu_threshold = self.config.get('cpu_threshold', 80)  # 80% CPU
+        self.memory_threshold = self.config.get('memory_threshold', 80)  # 80% memory
+        self.events = []
+        self._stop_event = threading.Event()
+        self._thread = None
+        
+    def start(self) -> None:
+        """Start process monitoring."""
+        if not self.enabled:
+            logger.warning("Process monitor is disabled")
+            return
+            
+        try:
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._monitor_loop)
+            self._thread.daemon = True
+            self._thread.start()
+            logger.info("Process monitor started")
+            
+        except Exception as e:
+            logger.error(f"Failed to start process monitor: {e}")
+            
+    def stop(self) -> None:
+        """Stop process monitoring."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join()
+        logger.info("Process monitor stopped")
+        
+    def _monitor_loop(self) -> None:
+        """Main monitoring loop."""
+        while not self._stop_event.is_set():
+            try:
+                # Get process metrics
+                metrics = self._collect_metrics()
+                self._analyze_metrics(metrics)
+                
+                # Wait for next interval
+                self._stop_event.wait(self.monitor_interval)
+                
+            except Exception as e:
+                logger.error(f"Error in process monitoring loop: {e}")
+                
+    def _collect_metrics(self) -> Dict[str, Any]:
+        """Collect process metrics.
+        
+        Returns:
+            Process metrics
+        """
+        try:
+            metrics = {
+                'timestamp': datetime.now().isoformat(),
+                'processes': {}
+            }
+            
+            # Collect metrics for each process
+            for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+                try:
+                    # Get process info
+                    info = proc.info
+                    pid = info['pid']
+                    
+                    metrics['processes'][pid] = {
+                        'name': info['name'],
+                        'cpu_percent': info['cpu_percent'] or 0,
+                        'memory_percent': info['memory_percent'] or 0
+                    }
+                    
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                    
+            return metrics
+            
+        except Exception as e:
+            logger.error(f"Error collecting process metrics: {e}")
+            return {}
+            
+    def _analyze_metrics(self, metrics: Dict[str, Any]) -> None:
+        """Analyze process metrics.
+        
+        Args:
+            metrics: Process metrics
+        """
+        try:
+            for pid, info in metrics['processes'].items():
+                # Check CPU usage
+                if info['cpu_percent'] > self.cpu_threshold:
+                    self._add_event('HIGH_CPU_USAGE', 'warning', {
+                        'pid': pid,
+                        'name': info['name'],
+                        'cpu_percent': info['cpu_percent'],
+                        'threshold': self.cpu_threshold
+                    })
+                    
+                # Check memory usage
+                if info['memory_percent'] > self.memory_threshold:
+                    self._add_event('HIGH_MEMORY_USAGE', 'warning', {
+                        'pid': pid,
+                        'name': info['name'],
+                        'memory_percent': info['memory_percent'],
+                        'threshold': self.memory_threshold
+                    })
+                    
+        except Exception as e:
+            logger.error(f"Error analyzing process metrics: {e}")
+            
+    def _add_event(self, event_type: str, severity: str, data: Dict[str, Any]) -> None:
+        """Add monitoring event.
+        
+        Args:
+            event_type: Type of event
+            severity: Event severity
+            data: Event data
+        """
+        try:
+            event = {
+                'timestamp': datetime.now().isoformat(),
+                'type': event_type,
+                'severity': severity,
+                'data': data
+            }
+            
+            self.events.append(event)
+            logger.log(
+                severity.upper(),
+                f"Process monitoring event: {event_type} - Process {data['name']} ({data['pid']})"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error adding event: {e}")
+            
+    def get_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get monitoring events.
+        
+        Args:
+            limit: Maximum number of events to return
             
         Returns:
-            bool: True if process is suspicious, False otherwise
+            List of events
         """
-        # CPU usage threshold (90%)
-        if process.get('cpu_percent', 0) > 90:
-            return True
-            
-        # Memory usage threshold (80%)
-        if process.get('memory_percent', 0) > 80:
-            return True
-            
-        # Check for suspicious network connections
-        connections = process.get('connections', [])
-        for conn in connections:
-            remote_ip = conn.get('remote_ip')
-            if remote_ip and remote_ip not in ['127.0.0.1', '::1']:
-                # TODO: Add more sophisticated IP reputation checking
-                return True
-                
-        # Check for suspicious process names
-        suspicious_names = ['cmd.exe', 'powershell.exe', 'netcat', 'ncat']
-        if process.get('name', '').lower() in suspicious_names:
-            return True
-            
-        return False
+        if limit:
+            return self.events[-limit:]
+        return self.events.copy()
         
-    def get_suspicious_processes(self):
-        """Get list of suspicious processes."""
-        return [self.process_list[pid] for pid in self.suspicious_processes if pid in self.process_list]
+    def clear_events(self) -> None:
+        """Clear monitoring events."""
+        self.events.clear()

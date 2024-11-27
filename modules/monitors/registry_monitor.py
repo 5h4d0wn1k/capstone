@@ -1,113 +1,222 @@
-#!/usr/bin/env python3
+"""Windows Registry monitoring implementation."""
 
-import win32evtlog
-import win32con
+import winreg
 import threading
 import time
 from datetime import datetime
+from typing import Dict, Any, List, Optional
 from loguru import logger
 
 class RegistryMonitor:
-    """Monitor Windows Registry changes."""
+    """Windows Registry monitoring and analysis."""
     
-    def __init__(self):
-        """Initialize registry monitor."""
-        self.running = False
-        self.monitor_thread = None
-        self.events = []
-        self.alerts = []
-        
-    def start(self):
-        """Start registry monitoring."""
-        if not self.running:
-            self.running = True
-            self.monitor_thread = threading.Thread(target=self._monitor_registry)
-            self.monitor_thread.daemon = True
-            self.monitor_thread.start()
-            logger.info("Registry monitor started")
-            
-    def stop(self):
-        """Stop registry monitoring."""
-        self.running = False
-        if self.monitor_thread:
-            self.monitor_thread.join(timeout=5)
-        logger.info("Registry monitor stopped")
-        
-    def _monitor_registry(self):
-        """Monitor registry changes continuously."""
-        while self.running:
-            try:
-                handle = win32evtlog.OpenEventLog(None, "Security")
-                flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
-                
-                events = win32evtlog.ReadEventLog(handle, flags, 0)
-                
-                for event in events:
-                    if event.EventID == 4657:  # Registry value modified
-                        event_data = {
-                            'timestamp': event.TimeGenerated.isoformat(),
-                            'event_id': event.EventID,
-                            'source': event.SourceName,
-                            'key': event.StringInserts[0] if event.StringInserts else None,
-                            'type': event.StringInserts[1] if event.StringInserts and len(event.StringInserts) > 1 else None,
-                            'value': event.StringInserts[2] if event.StringInserts and len(event.StringInserts) > 2 else None
-                        }
-                        
-                        self.events.append(event_data)
-                        
-                        # Check if change is suspicious
-                        if self.is_suspicious_change(event_data):
-                            alert = {
-                                'timestamp': event_data['timestamp'],
-                                'severity': 'High',
-                                'message': f"Suspicious registry change detected: {event_data['key']}"
-                            }
-                            self.alerts.append(alert)
-                            logger.warning(f"Suspicious registry change: {event_data['key']}")
-                            
-            except Exception as e:
-                logger.error(f"Error monitoring registry: {e}")
-                
-            time.sleep(1)  # Update every second
-            
-    def get_events(self):
-        """Get list of registry events."""
-        return self.events
-        
-    def get_alerts(self):
-        """Get list of registry alerts."""
-        return self.alerts
-        
-    def is_suspicious_change(self, event):
-        """
-        Check if a registry change is suspicious.
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize monitor.
         
         Args:
-            event (dict): Event information dictionary
+            config: Monitor configuration
+        """
+        self.config = config.get('registry_monitor', {})
+        self.enabled = self.config.get('enabled', True)
+        self.monitor_interval = self.config.get('monitor_interval', 300)  # 5 minutes
+        self.watch_keys = self.config.get('watch_keys', [
+            r'HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run',
+            r'HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\RunOnce',
+            r'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run',
+            r'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\RunOnce'
+        ])
+        self.events = []
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._baseline = {}
+        
+    def start(self) -> None:
+        """Start registry monitoring."""
+        if not self.enabled:
+            logger.warning("Registry monitor is disabled")
+            return
+            
+        try:
+            # Create baseline
+            self._baseline = self._create_baseline()
+            
+            # Start monitoring thread
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._monitor_loop)
+            self._thread.daemon = True
+            self._thread.start()
+            logger.info("Registry monitor started")
+            
+        except Exception as e:
+            logger.error(f"Failed to start registry monitor: {e}")
+            
+    def stop(self) -> None:
+        """Stop registry monitoring."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join()
+        logger.info("Registry monitor stopped")
+        
+    def _monitor_loop(self) -> None:
+        """Main monitoring loop."""
+        while not self._stop_event.is_set():
+            try:
+                # Check registry keys
+                current_state = self._scan_registry()
+                self._compare_state(current_state)
+                
+                # Update baseline
+                self._baseline = current_state
+                
+                # Wait for next interval
+                self._stop_event.wait(self.monitor_interval)
+                
+            except Exception as e:
+                logger.error(f"Error in registry monitoring loop: {e}")
+                
+    def _create_baseline(self) -> Dict[str, Any]:
+        """Create registry baseline.
+        
+        Returns:
+            Registry baseline data
+        """
+        try:
+            return self._scan_registry()
+            
+        except Exception as e:
+            logger.error(f"Error creating registry baseline: {e}")
+            return {}
+            
+    def _scan_registry(self) -> Dict[str, Any]:
+        """Scan registry keys.
+        
+        Returns:
+            Registry scan data
+        """
+        try:
+            data = {}
+            
+            for key_path in self.watch_keys:
+                # Parse registry path
+                if key_path.startswith('HKEY_LOCAL_MACHINE'):
+                    hkey = winreg.HKEY_LOCAL_MACHINE
+                    subkey = key_path[len('HKEY_LOCAL_MACHINE\\'):]
+                elif key_path.startswith('HKEY_CURRENT_USER'):
+                    hkey = winreg.HKEY_CURRENT_USER
+                    subkey = key_path[len('HKEY_CURRENT_USER\\'):]
+                else:
+                    continue
+                    
+                try:
+                    # Open key
+                    key = winreg.OpenKey(hkey, subkey, 0, winreg.KEY_READ)
+                    
+                    # Read values
+                    values = {}
+                    try:
+                        i = 0
+                        while True:
+                            name, value, type = winreg.EnumValue(key, i)
+                            values[name] = {
+                                'value': value,
+                                'type': type
+                            }
+                            i += 1
+                    except WindowsError:
+                        pass
+                        
+                    data[key_path] = values
+                    winreg.CloseKey(key)
+                    
+                except WindowsError:
+                    continue
+                    
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error scanning registry: {e}")
+            return {}
+            
+    def _compare_state(self, current: Dict[str, Any]) -> None:
+        """Compare current state with baseline.
+        
+        Args:
+            current: Current registry state
+        """
+        try:
+            for key_path in self.watch_keys:
+                baseline_values = self._baseline.get(key_path, {})
+                current_values = current.get(key_path, {})
+                
+                # Check for new values
+                for name, info in current_values.items():
+                    if name not in baseline_values:
+                        self._add_event('REGISTRY_VALUE_ADDED', 'warning', {
+                            'key': key_path,
+                            'name': name,
+                            'value': info['value'],
+                            'type': info['type']
+                        })
+                    elif info != baseline_values[name]:
+                        self._add_event('REGISTRY_VALUE_MODIFIED', 'warning', {
+                            'key': key_path,
+                            'name': name,
+                            'old_value': baseline_values[name]['value'],
+                            'new_value': info['value'],
+                            'type': info['type']
+                        })
+                        
+                # Check for deleted values
+                for name in baseline_values:
+                    if name not in current_values:
+                        self._add_event('REGISTRY_VALUE_DELETED', 'warning', {
+                            'key': key_path,
+                            'name': name,
+                            'value': baseline_values[name]['value'],
+                            'type': baseline_values[name]['type']
+                        })
+                        
+        except Exception as e:
+            logger.error(f"Error comparing registry state: {e}")
+            
+    def _add_event(self, event_type: str, severity: str, data: Dict[str, Any]) -> None:
+        """Add monitoring event.
+        
+        Args:
+            event_type: Type of event
+            severity: Event severity
+            data: Event data
+        """
+        try:
+            event = {
+                'timestamp': datetime.now().isoformat(),
+                'type': event_type,
+                'severity': severity,
+                'data': data
+            }
+            
+            self.events.append(event)
+            logger.log(
+                severity.upper(),
+                f"Registry monitoring event: {event_type} - {data['key']}\\{data['name']}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error adding event: {e}")
+            
+    def get_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get monitoring events.
+        
+        Args:
+            limit: Maximum number of events to return
             
         Returns:
-            bool: True if change is suspicious, False otherwise
+            List of events
         """
-        key = event.get('key', '').lower()
+        if limit:
+            return self.events[-limit:]
+        return self.events.copy()
         
-        # Check for autorun locations
-        suspicious_keys = [
-            'software\\microsoft\\windows\\currentversion\\run',
-            'software\\microsoft\\windows\\currentversion\\runonce',
-            'software\\wow6432node\\microsoft\\windows\\currentversion\\run',
-            'system\\currentcontrolset\\services'
-        ]
-        if any(sus_key in key for sus_key in suspicious_keys):
-            return True
-            
-        # Check for system policies
-        if 'securitypolicy' in key or 'groupolicy' in key:
-            return True
-            
-        # Check for suspicious values
-        value = event.get('value', '').lower()
-        suspicious_values = ['.exe', '.dll', '.bat', '.ps1', '.vbs']
-        if any(sus_val in value for sus_val in suspicious_values):
-            return True
-            
-        return False
+    def clear_events(self) -> None:
+        """Clear monitoring events."""
+        self.events.clear()

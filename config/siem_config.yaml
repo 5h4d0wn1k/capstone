@@ -1,0 +1,193 @@
+# SIEM Core Configuration
+
+system:
+  name: "Enterprise SIEM"
+  version: "1.0.0"
+  environment: "production"
+  debug: false
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/siem.log"
+  max_size: 100MB
+  backup_count: 10
+
+database:
+  type: "postgresql"
+  host: "localhost"
+  port: 5432
+  name: "siem_db"
+  user: "siem_user"
+  password_env: "SIEM_DB_PASSWORD"
+  pool_size: 20
+  max_overflow: 10
+
+elasticsearch:
+  hosts: ["localhost:9200"]
+  index_prefix: "siem"
+  shards: 5
+  replicas: 1
+  refresh_interval: "30s"
+
+kafka:
+  bootstrap_servers: ["localhost:9092"]
+  topics:
+    events: "siem.events"
+    alerts: "siem.alerts"
+    metrics: "siem.metrics"
+  consumer_group: "siem_processors"
+  auto_offset_reset: "earliest"
+  enable_auto_commit: true
+
+collectors:
+  windows_event:
+    enabled: true
+    channels: 
+      - "Security"
+      - "System"
+      - "Application"
+    interval: 10
+  syslog:
+    enabled: true
+    port: 514
+    protocols: ["UDP", "TCP"]
+  network:
+    enabled: true
+    interface: "any"
+    promiscuous: true
+    bpf_filter: ""
+  file:
+    enabled: true
+    paths:
+      - "/var/log/*.log"
+      - "/var/log/messages"
+    exclude_patterns:
+      - "*.gz"
+      - "*.zip"
+
+analyzers:
+  ml_models:
+    anomaly_detection:
+      algorithm: "isolation_forest"
+      contamination: 0.1
+      training_interval: "24h"
+    behavior_analysis:
+      algorithm: "dbscan"
+      eps: 0.3
+      min_samples: 2
+  yara_rules:
+    enabled: true
+    rules_path: "rules/yara"
+    scan_timeout: 60
+  sigma_rules:
+    enabled: true
+    rules_path: "rules/sigma"
+    backend: "elasticsearch"
+
+alerts:
+  severity_levels:
+    - "critical"
+    - "high"
+    - "medium"
+    - "low"
+    - "info"
+  channels:
+    email:
+      enabled: true
+      smtp_server: "smtp.company.com"
+      smtp_port: 587
+      use_tls: true
+      from_address: "siem@company.com"
+      to_addresses: ["security@company.com"]
+    slack:
+      enabled: false
+      webhook_url_env: "SLACK_WEBHOOK_URL"
+      channel: "#security-alerts"
+    webhook:
+      enabled: false
+      url: "http://incident-response-system/api/alerts"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: ""
+
+response:
+  automation:
+    enabled: true
+    max_severity: "high"
+    playbooks_path: "playbooks"
+  quarantine:
+    enabled: true
+    network_isolation: true
+    process_termination: true
+  notification:
+    enabled: true
+    escalation_timeout: 300
+
+api:
+  host: "0.0.0.0"
+  port: 8080
+  ssl:
+    enabled: true
+    cert_file: "certs/server.crt"
+    key_file: "certs/server.key"
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+  authentication:
+    type: "jwt"
+    secret_key_env: "JWT_SECRET_KEY"
+    token_expiry: "8h"
+
+web_interface:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8443
+  ssl:
+    enabled: true
+    cert_file: "certs/web.crt"
+    key_file: "certs/web.key"
+  session:
+    timeout: "30m"
+    redis:
+      host: "localhost"
+      port: 6379
+      db: 0
+
+storage:
+  retention:
+    events: "90d"
+    alerts: "365d"
+    metrics: "180d"
+  backup:
+    enabled: true
+    interval: "24h"
+    path: "/backup/siem"
+    retention: "30d"
+
+metrics:
+  enabled: true
+  prometheus:
+    enabled: true
+    port: 9090
+  grafana:
+    enabled: true
+    port: 3000
+
+security:
+  encryption:
+    algorithm: "AES-256-GCM"
+    key_rotation: "30d"
+  authentication:
+    mfa_required: true
+    password_policy:
+      min_length: 12
+      require_special: true
+      require_numbers: true
+      require_uppercase: true
+      max_age: "90d"
+  audit:
+    enabled: true
+    log_searches: true
+    log_configuration_changes: true

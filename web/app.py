@@ -217,24 +217,6 @@ def add_event(event_data: Dict[str, Any]) -> bool:
         logger.error(f"Error adding event: {e}")
         return False
 
-def validate_metric(value, min_val=0, max_val=100):
-    """
-    Validate and normalize a metric value.
-    
-    Args:
-        value: The value to validate
-        min_val: Minimum allowed value
-        max_val: Maximum allowed value
-        
-    Returns:
-        float: Normalized value between min_val and max_val
-    """
-    try:
-        val = float(value)
-        return max(min_val, min(val, max_val))
-    except (TypeError, ValueError):
-        return min_val
-
 def start_web_interface(siem, debug: bool = False):
     """Start web interface
     

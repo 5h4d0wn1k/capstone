@@ -3,221 +3,233 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Windows SIEM Dashboard</title>
+    <title>Enterprise SIEM Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        [x-cloak] { display: none !important; }
-    </style>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link rel="stylesheet" href="/static/css/siem.css">
 </head>
 <body class="bg-gray-100">
-    <div x-data="dashboard()" x-init="init()" class="space-y-6">
-        <!-- System Overview -->
-        <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-            <div class="metric-card">
-                <h3 class="text-lg font-semibold text-gray-900">CPU Usage</h3>
-                <div class="mt-2 flex items-baseline">
-                    <p class="text-2xl font-semibold text-indigo-600">
-                        <span x-text="metrics.cpu_usage || '0'"></span>%
-                    </p>
+    <div class="min-h-screen">
+        <!-- Header -->
+        <nav class="bg-gray-800 text-white p-4">
+            <div class="container mx-auto flex justify-between items-center">
+                <h1 class="text-2xl font-bold">Enterprise SIEM</h1>
+                <div class="flex items-center space-x-4">
+                    <span id="systemHealth" class="px-4 py-2 rounded">System Health: 100%</span>
+                    <span id="threatLevel" class="px-4 py-2 rounded">Threat Level: LOW</span>
                 </div>
-                <canvas id="cpuChart" class="mt-3 h-16"></canvas>
             </div>
+        </nav>
 
-            <div class="metric-card">
-                <h3 class="text-lg font-semibold text-gray-900">Memory Usage</h3>
-                <div class="mt-2 flex items-baseline">
-                    <p class="text-2xl font-semibold text-indigo-600">
-                        <span x-text="metrics.memory_usage || '0'"></span>%
-                    </p>
+        <!-- Main Content -->
+        <div class="container mx-auto p-4">
+            <!-- Stats Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-gray-500 text-sm">Active Alerts</h3>
+                    <p id="activeAlerts" class="text-2xl font-bold">0</p>
                 </div>
-                <canvas id="memoryChart" class="mt-3 h-16"></canvas>
-            </div>
-
-            <div class="metric-card">
-                <h3 class="text-lg font-semibold text-gray-900">Network Usage</h3>
-                <div class="mt-2 flex items-baseline">
-                    <p class="text-2xl font-semibold text-indigo-600">
-                        <span x-text="metrics.network_usage_mbps ? metrics.network_usage_mbps.toFixed(2) : '0'"></span> Mbps
-                    </p>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-gray-500 text-sm">Events/Minute</h3>
+                    <p id="eventsPerMinute" class="text-2xl font-bold">0</p>
                 </div>
-                <canvas id="networkChart" class="mt-3 h-16"></canvas>
-            </div>
-
-            <div class="metric-card">
-                <h3 class="text-lg font-semibold text-gray-900">Process Count</h3>
-                <div class="mt-2 flex items-baseline">
-                    <p class="text-2xl font-semibold text-indigo-600">
-                        <span x-text="metrics.process_count || '0'"></span>
-                    </p>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-gray-500 text-sm">Network Connections</h3>
+                    <p id="networkConnections" class="text-2xl font-bold">0</p>
                 </div>
-                <canvas id="processChart" class="mt-3 h-16"></canvas>
-            </div>
-        </div>
-
-        <!-- Alerts and Events -->
-        <div class="grid gap-6 md:grid-cols-2">
-            <!-- Recent Alerts -->
-            <div class="bg-white rounded-lg shadow-md p-6">
-                <h2 class="text-xl font-semibold mb-4 flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-red-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                    Recent Alerts
-                </h2>
-                <div class="space-y-2">
-                    <template x-for="alert in alerts" :key="alert.timestamp">
-                        <div :class="'p-3 rounded ' + getAlertClass(alert.type)">
-                            <div class="flex justify-between">
-                                <span class="font-medium" x-text="alert.type"></span>
-                                <span class="text-sm" x-text="formatTime(alert.timestamp)"></span>
-                            </div>
-                            <p class="text-sm mt-1" x-text="alert.message"></p>
-                        </div>
-                    </template>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-gray-500 text-sm">System Load</h3>
+                    <p id="systemLoad" class="text-2xl font-bold">0%</p>
                 </div>
             </div>
 
-            <!-- System Events -->
-            <div class="bg-white rounded-lg shadow-md p-6">
-                <h2 class="text-xl font-semibold mb-4 flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-blue-500 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                    System Events
-                </h2>
-                <div class="space-y-2">
-                    <template x-for="event in events" :key="event.timestamp">
-                        <div class="bg-gray-50 p-3 rounded">
-                            <div class="flex justify-between">
-                                <span class="font-medium" x-text="event.source"></span>
-                                <span class="text-sm" x-text="formatTime(event.timestamp)"></span>
-                            </div>
-                            <p class="text-sm mt-1" x-text="event.message"></p>
-                        </div>
-                    </template>
+            <!-- Charts Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-gray-700 font-semibold mb-4">Event Timeline</h3>
+                    <div id="eventTimeline" class="chart-container"></div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <h3 class="text-gray-700 font-semibold mb-4">Alert Distribution</h3>
+                    <div id="alertDistribution" class="chart-container"></div>
                 </div>
             </div>
-        </div>
 
-        <!-- Component Status -->
-        <div class="bg-white rounded-lg shadow-md p-6">
-            <h2 class="text-xl font-semibold mb-4">Component Status</h2>
-            <div class="grid gap-4 md:grid-cols-3">
-                <template x-for="(status, component) in componentStatus" :key="component">
-                    <div class="p-3 rounded" :class="status ? 'bg-green-100' : 'bg-red-100'">
-                        <div class="flex items-center justify-between">
-                            <span class="font-medium" x-text="formatComponentName(component)"></span>
-                            <span class="px-2 py-1 text-sm rounded" 
-                                  :class="status ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'"
-                                  x-text="status ? 'Active' : 'Inactive'">
-                            </span>
-                        </div>
-                    </div>
-                </template>
+            <!-- Alerts List -->
+            <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="text-gray-700 font-semibold mb-4">Recent Alerts</h3>
+                <div id="alertsList" class="space-y-2 max-h-96 overflow-y-auto">
+                    <!-- Alerts will be dynamically added here -->
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        function dashboard() {
-            return {
-                metrics: {},
-                alerts: [],
-                events: [],
-                componentStatus: {},
-                charts: {},
+        // WebSocket Connection
+        const socket = io();
+        
+        // Update Functions
+        function updateThreatLevel(level) {
+            const el = document.getElementById('threatLevel');
+            el.textContent = `Threat Level: ${level}`;
+            el.className = `px-4 py-2 rounded ${getThreatLevelClass(level)}`;
+        }
 
-                init() {
-                    this.initCharts();
-                    this.setupSocketListeners();
-                },
+        function updateSystemHealth(health) {
+            const el = document.getElementById('systemHealth');
+            el.textContent = `System Health: ${health}%`;
+            el.className = `px-4 py-2 rounded ${getHealthClass(health)}`;
+        }
 
-                initCharts() {
-                    const commonConfig = {
-                        type: 'line',
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: { legend: { display: false } },
-                            scales: {
-                                x: { display: false },
-                                y: { display: false }
-                            },
-                            elements: {
-                                line: { tension: 0.4 },
-                                point: { radius: 0 }
-                            }
-                        },
-                        data: {
-                            labels: Array(20).fill(''),
-                            datasets: [{
-                                data: Array(20).fill(0),
-                                borderColor: 'rgb(79, 70, 229)',
-                                borderWidth: 2,
-                                fill: true,
-                                backgroundColor: 'rgba(79, 70, 229, 0.1)'
-                            }]
-                        }
-                    };
+        function updateStats(data) {
+            document.getElementById('activeAlerts').textContent = data.active_alerts;
+            document.getElementById('eventsPerMinute').textContent = data.events_per_minute;
+            document.getElementById('networkConnections').textContent = data.network_connections;
+            document.getElementById('systemLoad').textContent = `${data.system_load}%`;
+        }
 
-                    this.charts.cpu = new Chart('cpuChart', { ...commonConfig });
-                    this.charts.memory = new Chart('memoryChart', { ...commonConfig });
-                    this.charts.network = new Chart('networkChart', { ...commonConfig });
-                    this.charts.process = new Chart('processChart', { ...commonConfig });
-                },
-
-                setupSocketListeners() {
-                    socket.on('metrics_update', (data) => {
-                        this.metrics = data.metrics;
-                        this.updateCharts(data.metrics);
-                    });
-
-                    socket.on('event_update', (data) => {
-                        this.events.unshift(data.event);
-                        this.events = this.events.slice(0, 10);
-                    });
-
-                    socket.on('status_update', (data) => {
-                        this.componentStatus = data.components;
-                    });
-
-                    socket.emit('subscribe_metrics');
-                },
-
-                updateCharts(metrics) {
-                    const updateChart = (chart, value) => {
-                        chart.data.datasets[0].data.push(value);
-                        chart.data.datasets[0].data.shift();
-                        chart.update('quiet');
-                    };
-
-                    updateChart(this.charts.cpu, metrics.cpu_usage || 0);
-                    updateChart(this.charts.memory, metrics.memory_usage || 0);
-                    updateChart(this.charts.network, metrics.network_usage_mbps || 0);
-                    updateChart(this.charts.process, metrics.process_count || 0);
-                },
-
-                getAlertClass(type) {
-                    const classes = {
-                        'critical': 'alert-critical',
-                        'warning': 'alert-warning',
-                        'info': 'alert-info'
-                    };
-                    return classes[type] || 'alert-info';
-                },
-
-                formatTime(timestamp) {
-                    return new Date(timestamp).toLocaleTimeString();
-                },
-
-                formatComponentName(name) {
-                    return name.split('_').map(word => 
-                        word.charAt(0).toUpperCase() + word.slice(1)
-                    ).join(' ');
-                }
+        function addAlert(alert) {
+            const alertsList = document.getElementById('alertsList');
+            const alertEl = document.createElement('div');
+            alertEl.className = `p-3 rounded ${getAlertClass(alert.severity)} mb-2`;
+            
+            const timestamp = new Date(alert.timestamp).toLocaleString();
+            
+            alertEl.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <div class="flex-1">
+                        <div class="font-semibold">${alert.rule}</div>
+                        <div class="text-sm mt-1">${alert.details}</div>
+                        <div class="text-xs mt-1 text-gray-600">Source: ${alert.source}</div>
+                    </div>
+                    <div class="text-sm text-gray-500 ml-4">${timestamp}</div>
+                </div>
+            `;
+            
+            // Add to the beginning of the list
+            alertsList.insertBefore(alertEl, alertsList.firstChild);
+            
+            // Keep only the last 100 alerts
+            while (alertsList.children.length > 100) {
+                alertsList.removeChild(alertsList.lastChild);
             }
         }
+
+        // Chart Data
+        let eventTimelineData = {
+            x: [],
+            y: [],
+            type: 'scatter',
+            name: 'Events/Minute'
+        };
+
+        let alertDistributionData = {
+            values: [],
+            labels: ['Critical', 'High', 'Medium', 'Low'],
+            type: 'pie',
+            name: 'Alert Distribution'
+        };
+
+        // Initialize Charts
+        function initCharts() {
+            Plotly.newPlot('eventTimeline', [eventTimelineData], {
+                title: 'Event Timeline',
+                xaxis: { title: 'Time' },
+                yaxis: { title: 'Events' }
+            });
+
+            Plotly.newPlot('alertDistribution', [alertDistributionData], {
+                title: 'Alert Distribution'
+            });
+        }
+
+        function updateEventTimeline(data) {
+            const time = new Date(data.time);
+            eventTimelineData.x.push(time);
+            eventTimelineData.y.push(data.count);
+
+            // Keep only last 60 points (1 hour)
+            if (eventTimelineData.x.length > 60) {
+                eventTimelineData.x.shift();
+                eventTimelineData.y.shift();
+            }
+
+            Plotly.update('eventTimeline', 
+                { x: [eventTimelineData.x], y: [eventTimelineData.y] }
+            );
+        }
+
+        function updateAlertDistribution(data) {
+            alertDistributionData.values = [
+                data.critical,
+                data.high,
+                data.medium,
+                data.low
+            ];
+
+            Plotly.update('alertDistribution', 
+                { values: [alertDistributionData.values] }
+            );
+        }
+
+        // Utility Functions
+        function getThreatLevelClass(level) {
+            switch(level) {
+                case 'CRITICAL': return 'bg-red-600';
+                case 'HIGH': return 'bg-orange-500';
+                case 'MEDIUM': return 'bg-yellow-500';
+                default: return 'bg-green-500';
+            }
+        }
+
+        function getHealthClass(health) {
+            if (health >= 90) return 'bg-green-500';
+            if (health >= 70) return 'bg-yellow-500';
+            if (health >= 50) return 'bg-orange-500';
+            return 'bg-red-600';
+        }
+
+        function getAlertClass(severity) {
+            switch(severity.toLowerCase()) {
+                case 'critical': return 'bg-red-100 border-red-500 border';
+                case 'high': return 'bg-orange-100 border-orange-500 border';
+                case 'medium': return 'bg-yellow-100 border-yellow-500 border';
+                default: return 'bg-green-100 border-green-500 border';
+            }
+        }
+
+        // WebSocket Event Handlers
+        socket.on('connect', () => {
+            console.log('Connected to SIEM server');
+            initCharts();
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from SIEM server');
+        });
+
+        socket.on('update', (data) => {
+            console.log('Received update:', data);
+            updateThreatLevel(data.threat_level);
+            updateSystemHealth(data.system_health);
+            updateStats(data);
+            updateEventTimeline(data);
+            updateAlertDistribution(data);
+        });
+
+        socket.on('alert', (alert) => {
+            console.log('Received alert:', alert);
+            addAlert(alert);
+            // Play alert sound
+            new Audio('/static/sounds/alert.mp3').play().catch(e => console.log('Error playing sound:', e));
+        });
+
+        // Initialize charts on load
+        initCharts();
     </script>
+
+    <script src="/static/js/siem.js"></script>
 </body>
 </html>

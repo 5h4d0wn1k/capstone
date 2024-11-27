@@ -1,0 +1,68 @@
+siem:
+  enabled: true
+  log_dir: ./logs
+  rules_dir: ./rules
+
+database:
+  url: sqlite+aiosqlite:///test_siem.db
+
+collectors:
+  windows:
+    enabled: true
+    log_types: 
+      - Security
+      - System
+      - Application
+    interval: 1  # seconds
+
+  syslog:
+    enabled: true
+    port: 5140
+    protocol: UDP
+    bind_address: 0.0.0.0
+
+  custom:
+    enabled: true
+    paths:
+      - ./logs/custom.log
+    patterns:
+      - type: apache
+        regex: '^(\S+) \S+ \S+ \[([\w:/]+\s[+\-]\d{4})\] "(\S+)\s?(\S+)?\s?(\S+)?" (\d{3}|-) (\d+|-)'
+
+monitor:
+  enabled: true
+  interval: 5  # seconds
+  thresholds:
+    cpu: 90  # percent
+    memory: 85  # percent
+    disk: 95  # percent
+    network: 1000000  # bytes/sec
+
+defensive:
+  enabled: true
+  log_dir: ./logs
+  rules_dir: ./rules
+  alert_threshold: 80
+  components:
+    ids:
+      enabled: true
+      suricata:
+        enabled: false
+        config_path: /etc/suricata/suricata.yaml
+      zeek:
+        enabled: false
+
+offensive:
+  enabled: true
+  scan_interval: 3600  # seconds
+  targets:
+    - 192.168.1.0/24
+  ports:
+    - 22
+    - 80
+    - 443
+    - 3389
+  tools:
+    nmap:
+      enabled: true
+      flags: "-sS -sV"

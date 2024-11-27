@@ -3,196 +3,168 @@
 # Core Settings
 core:
   log_level: INFO
-  max_workers: 10
+  max_workers: 4
   event_batch_size: 100
-  max_queue_size: 10000
+  max_queue_size: 5000
 
-# Storage Configuration
-elasticsearch:
-  host: "localhost:9200"
-  user: "elastic"
-  password: "changeme"
-  indices:
-    events: "siem-events"
-    alerts: "siem-alerts"
-    metrics: "siem-metrics"
+# System Settings
+system:
+  name: "Enterprise SIEM"
+  environment: "production"  # production, development, testing
+  log_level: "INFO"
+  secret_key: "${SIEM_SECRET_KEY}"  # Set this in environment variables
 
-# Metrics and Monitoring
-prometheus:
-  enabled: true
-  port: 9090
-  metrics_interval: 60
+# Database Configuration
+database:
+  url: "sqlite+aiosqlite:///siem.db"
+  pool_size: 20
+  max_overflow: 10
+  echo: false
 
-# Visualization
-grafana:
-  enabled: true
-  host: "http://localhost:3000"
-  user: "admin"
-  password: "admin"
-  dashboard_templates: "./config/dashboards"
+# Web Interface
+web:
+  host: "0.0.0.0"  # Listen on all interfaces
+  port: 8080
+  debug: false
+  session_timeout: 3600  # 1 hour in seconds
+  secret_key: "${SIEM_SECRET_KEY}"  # Set via environment variable
+  session_type: "filesystem"
 
 # Security Components
 security:
-  # Intrusion Detection Systems
-  suricata:
-    enabled: true
-    config_path: "./config/suricata/suricata.yaml"
-    rules_path: "./config/suricata/rules"
-    
-  ossec:
-    enabled: true
-    config_path: "./config/ossec/ossec.conf"
-    
-  zeek:
-    enabled: true
-    scripts_path: "./config/zeek/scripts"
-    
-  yara:
-    enabled: true
-    rules_path: "./config/yara/rules"
+  password_min_length: 12
+  max_login_attempts: 5
+  lockout_duration: 300  # 5 minutes in seconds
+  session_token_expiry: 86400  # 24 hours in seconds
+  allowed_hosts: ["localhost", "127.0.0.1"]
 
-# Network Monitoring
-network:
-  netflow:
+  # Windows Event Collection
+  windows_events:
     enabled: true
-    host: "0.0.0.0"
-    port: 2055
-    
-  packet_capture:
-    enabled: true
-    interface: "any"
-    bpf_filter: "not port 22"
+    channels:
+      - "Security"
+      - "System"
+      - "Application"
+    max_events_per_batch: 1000
+    poll_interval_seconds: 30
 
-# Threat Intelligence
-threat_intel:
-  feeds:
-    - name: "AlienVault OTX"
-      url: "https://otx.alienvault.com/api/v1/pulses/subscribed"
-      api_key: "your_key_here"
-    - name: "VirusTotal"
-      api_key: "your_key_here"
-    - name: "AbuseIPDB"
-      api_key: "your_key_here"
-
-# Machine Learning
-ml:
-  models_path: "./config/ml_models"
-  training_interval: 86400  # 24 hours
-  anomaly_detection:
-    contamination: 0.1
-    features:
-      - "cpu_usage"
-      - "memory_usage"
-      - "network_throughput"
-      - "event_frequency"
-
-# Response Actions
-response:
-  auto_response: true
-  threshold: 8  # Severity threshold for automatic response
-  actions:
-    block_ip:
-      enabled: true
-      method: "iptables"
-    kill_process:
-      enabled: true
-    isolate_system:
-      enabled: true
-      
-# Alert Settings
-alerts:
-  severity_levels:
-    critical: 9
-    high: 7
-    medium: 5
-    low: 3
-  notification:
-    email:
-      enabled: true
-      smtp_server: "smtp.gmail.com"
-      smtp_port: 587
-      username: "your_email@gmail.com"
-      password: "your_app_password"
-      recipients:
-        - "admin@company.com"
-    slack:
-      enabled: true
-      webhook_url: "your_webhook_url"
-    teams:
-      enabled: false
-      webhook_url: "your_webhook_url"
-
-# System Monitoring
-monitoring:
-  system_metrics:
-    enabled: true
-    interval: 60
-    thresholds:
-      cpu_usage: 90
-      memory_usage: 90
-      disk_usage: 90
-      
-  process_monitoring:
-    enabled: true
-    interval: 30
-    suspicious_patterns:
-      - "cryptominer"
-      - "malware"
-      
+  # File System Monitoring
   file_monitoring:
     enabled: true
     paths:
-      - "/etc"
-      - "/bin"
-      - "/sbin"
-    exclude:
-      - "*.log"
+      - "C:\\Windows\\System32\\config"
+      - "C:\\Program Files"
+      - "C:\\Program Files (x86)"
+    ignore_patterns:
       - "*.tmp"
+      - "*.log"
+    poll_interval_seconds: 60
 
-# Logging
-logging:
-  file:
+  # Network Monitoring
+  network_monitoring:
     enabled: true
-    path: "./logs/siem.log"
-    max_size: "100M"
-    backup_count: 10
-  syslog:
+    interfaces:
+      - "eth0"
+      - "wlan0"
+    capture_timeout_seconds: 300
+    max_packet_size: 65535
+
+# Monitoring
+monitoring:
+  windows_events:
     enabled: true
-    facility: "local0"
-    
-# API Configuration
-api:
+    logs: ["Security", "System", "Application"]
+    interval: 10  # seconds
+  
+  network:
+    enabled: true
+    interface: "eth0"  # Change based on your network interface
+    capture_timeout: 1000  # milliseconds
+    max_packet_size: 65535
+    protocols: ["TCP", "UDP", "ICMP"]
+
+  system:
+    enabled: true
+    interval: 30  # seconds
+    metrics:
+      - cpu_usage
+      - memory_usage
+      - disk_usage
+      - network_io
+      - process_count
+
+# Machine Learning
+ml:
   enabled: true
-  host: "0.0.0.0"
-  port: 8080
-  ssl:
-    enabled: true
-    cert_file: "./config/ssl/cert.pem"
-    key_file: "./config/ssl/key.pem"
-  authentication:
-    method: "jwt"
-    secret_key: "your_secret_key"
-    token_expiry: 3600
+  models:
+    anomaly_detection:
+      type: "isolation_forest"
+      contamination: 0.1
+      training_interval_hours: 24
+    threat_classification:
+      type: "random_forest"
+      training_interval_hours: 48
 
-# Cloud Integration
-cloud:
-  aws:
-    enabled: false
-    region: "us-west-2"
-    access_key: "your_access_key"
-    secret_key: "your_secret_key"
-    services:
-      - "guardduty"
-      - "securityhub"
-      
-  azure:
-    enabled: false
-    tenant_id: "your_tenant_id"
-    client_id: "your_client_id"
-    client_secret: "your_client_secret"
-    subscription_id: "your_subscription_id"
-    
-  gcp:
-    enabled: false
-    project_id: "your_project_id"
-    credentials_file: "./config/gcp/credentials.json"
+# Machine Learning (New)
+machine_learning:
+  enabled: true
+  models:
+    anomaly_detection:
+      enabled: true
+      training_interval: 86400  # 24 hours
+      threshold: 0.95
+    threat_prediction:
+      enabled: true
+      update_interval: 3600  # 1 hour
+
+# Alerts
+alerts:
+  severity_levels:
+    - CRITICAL
+    - HIGH
+    - MEDIUM
+    - LOW
+    - INFO
+  retention_days: 30
+  max_alerts_per_minute: 1000
+  notification:
+    email:
+      enabled: false
+      smtp_server: "smtp.example.com"
+      smtp_port: 587
+      from_address: "siem@example.com"
+    webhook:
+      enabled: false
+      url: "https://example.com/webhook"
+
+# Offensive
+offensive:
+  enabled: true
+  scan_interval: 3600  # 1 hour
+  max_concurrent_scans: 5
+  targets: []  # Add target IPs/networks here
+  excluded_targets: []
+  ports: [20, 21, 22, 23, 25, 53, 80, 443, 445, 3389]
+
+# Defensive
+defensive:
+  enabled: true
+  auto_block: true
+  block_duration: 3600  # 1 hour
+  whitelist: ["127.0.0.1"]
+  blacklist: []
+  rules:
+    brute_force:
+      max_attempts: 5
+      window: 300  # 5 minutes
+    suspicious_traffic:
+      threshold: 1000  # connections per minute
+    malware_detection:
+      enabled: true
+      scan_downloads: true
+
+# Retention
+retention:
+  events_days: 30
+  alerts_days: 90
+  logs_days: 30

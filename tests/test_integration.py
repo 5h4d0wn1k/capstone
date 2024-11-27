@@ -1,235 +1,202 @@
 #!/usr/bin/env python3
+"""Integration tests for the SIEM system."""
 
 import os
 import sys
-import time
-import json
-import unittest
-import threading
-import socket
-import requests
-from datetime import datetime
-from loguru import logger
+import asyncio
+import pytest
+import yaml
+from datetime import datetime, timedelta
+from aiohttp import web
+import aiohttp
+from aiohttp.test_utils import TestClient, TestServer
+import logging
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from siem import SIEM
-from web.app import app, socketio
-from modules.monitors.process_monitor import ProcessMonitor
-from modules.monitors.network_monitor import NetworkMonitor
-from modules.monitors.file_monitor import FileMonitor
-from modules.monitors.registry_monitor import RegistryMonitor
+from siem_app import create_app
+from models import Base, EventModel, AlertModel, NetworkLogModel
+from modules.collectors.windows_event_collector import WindowsEventCollector
+from modules.defensive.defensive import DefensiveTools
+from modules.offensive.tools import OffensiveTools
 
-class TestIntegration(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        """Set up test environment"""
-        logger.remove()
-        logger.add(sys.stderr, level="INFO")
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+@pytest.fixture
+def config():
+    """Load test configuration."""
+    with open('config/test_config.yaml', 'r') as f:
+        return yaml.safe_load(f)
+
+@pytest.fixture
+async def db_engine(config):
+    """Create test database engine."""
+    engine = create_async_engine(config['database']['url'])
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+@pytest.fixture
+async def db_session(db_engine):
+    """Create test database session."""
+    async_session = sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    async with async_session() as session:
+        yield session
+
+@pytest.fixture
+async def app(config, db_engine):
+    """Create test application."""
+    app = web.Application()
+    app['config'] = config
+    app['db_engine'] = db_engine
+    app['db'] = sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    
+    # Setup routes and signal handlers
+    from web.routes import setup_routes
+    setup_routes(app)
+    
+    # Freeze signals before startup
+    app.freeze()
+    
+    # Initialize app
+    await app.startup()
+    yield app
+    await app.cleanup()
+
+@pytest.fixture
+async def test_client(aiohttp_client, app):
+    """Create test client."""
+    return await aiohttp_client(app)
+
+@pytest.mark.asyncio
+async def test_app_startup(app):
+    """Test application startup."""
+    assert app is not None
+    assert 'config' in app
+    assert 'db' in app
+    assert 'db_engine' in app
+
+@pytest.mark.asyncio
+async def test_windows_collector(app):
+    """Test Windows event collector."""
+    config = app['config']
+    collector = WindowsEventCollector(config)
+    
+    # Start collector
+    await collector.start()
+    assert collector.enabled
+    assert len(collector.log_types) > 0
+    
+    # Get events
+    events = await collector.get_events()
+    assert isinstance(events, list)
+    
+    # Stop collector
+    await collector.stop()
+
+@pytest.mark.asyncio
+async def test_defensive_tools(app):
+    """Test defensive security tools."""
+    config = app['config']
+    defensive = DefensiveTools(config)
+    
+    # Initialize tools
+    await defensive.init()
+    assert defensive.enabled
+    
+    # Test threat detection
+    threats = await defensive.detect_threats()
+    assert isinstance(threats, list)
+    
+    # Test anomaly detection
+    anomalies = await defensive.detect_anomalies()
+    assert isinstance(anomalies, list)
+    
+    # Cleanup
+    await defensive.cleanup()
+
+@pytest.mark.asyncio
+async def test_offensive_tools(app):
+    """Test offensive security tools."""
+    config = app['config']
+    offensive = OffensiveTools(config)
+    
+    # Initialize tools
+    await offensive.init()
+    assert offensive.enabled
+    
+    # Test scanning
+    results = await offensive.scan_network()
+    assert isinstance(results, dict)
+    
+    # Cleanup
+    await offensive.cleanup()
+
+@pytest.mark.asyncio
+async def test_api_endpoints(test_client):
+    """Test API endpoints."""
+    # Test events endpoint
+    resp = await test_client.get('/api/events')
+    assert resp.status == 200
+    data = await resp.json()
+    assert isinstance(data, list)
+    
+    # Test alerts endpoint
+    resp = await test_client.get('/api/alerts')
+    assert resp.status == 200
+    data = await resp.json()
+    assert isinstance(data, list)
+    
+    # Test network logs endpoint
+    resp = await test_client.get('/api/network_logs')
+    assert resp.status == 200
+    data = await resp.json()
+    assert isinstance(data, list)
+
+@pytest.mark.asyncio
+async def test_database_operations(app):
+    """Test database operations."""
+    async with app['db']() as session:
+        # Test event creation
+        event = EventModel(
+            timestamp=datetime.now(),
+            source='test',
+            event_type='test',
+            severity='info',
+            data='Test event'
+        )
+        session.add(event)
+        await session.commit()
         
-        # Create test files directory
-        cls.test_dir = os.path.join(os.path.dirname(__file__), 'test_files')
-        os.makedirs(cls.test_dir, exist_ok=True)
+        # Test alert creation
+        alert = AlertModel(
+            timestamp=datetime.now(),
+            rule_name='test_rule',
+            severity='high',
+            event_id=event.id,
+            status='new'
+        )
+        session.add(alert)
+        await session.commit()
         
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up test environment"""
-        if os.path.exists(cls.test_dir):
-            for file in os.listdir(cls.test_dir):
-                os.remove(os.path.join(cls.test_dir, file))
-            os.rmdir(cls.test_dir)
-            
-    def setUp(self):
-        """Initialize SIEM for each test"""
-        self.siem = SIEM()
-        self.web_thread = None
-        self.port = self.find_free_port()
-        
-    def tearDown(self):
-        """Clean up after each test"""
-        if self.siem:
-            self.siem.shutdown()
-        if self.web_thread and self.web_thread.is_alive():
-            self.web_thread.join(timeout=5)
-            
-    def find_free_port(self):
-        """Find a free port for testing"""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(('127.0.0.1', 0))
-            return s.getsockname()[1]
-            
-    def test_1_full_system_startup(self):
-        """Test complete system startup"""
-        # Start SIEM in a thread
-        def run_siem():
-            self.siem.run(port=self.port)
-            
-        self.web_thread = threading.Thread(target=run_siem)
-        self.web_thread.daemon = True
-        self.web_thread.start()
-        time.sleep(5)  # Give system time to start
-        
-        # Check if web interface is running
-        try:
-            response = requests.get(f'http://localhost:{self.port}/')
-            self.assertEqual(response.status_code, 200)
-        except Exception as e:
-            self.fail(f"Web interface not accessible: {e}")
-            
-        # Check if monitors are running
-        self.assertTrue(self.siem.process_monitor.running)
-        self.assertTrue(self.siem.network_monitor.running)
-        self.assertTrue(self.siem.file_monitor.running)
-        self.assertTrue(self.siem.registry_monitor.running)
-        logger.info("✓ Full system startup test passed")
-        
-    def test_2_event_flow(self):
-        """Test event flow through system"""
-        # Start SIEM
-        def run_siem():
-            self.siem.run(port=self.port)
-            
-        self.web_thread = threading.Thread(target=run_siem)
-        self.web_thread.daemon = True
-        self.web_thread.start()
-        time.sleep(5)
-        
-        # Create test event
-        test_event = {
-            'timestamp': datetime.now().isoformat(),
-            'severity': 'High',
-            'source': 'Integration Test',
-            'message': 'Test event flow'
-        }
-        
-        # Add event through SIEM
-        self.siem.add_event(test_event)
-        time.sleep(1)
-        
-        # Verify event in web interface
-        response = requests.get(f'http://localhost:{self.port}/api/events')
-        self.assertEqual(response.status_code, 200)
-        events = response.json()
-        self.assertTrue(any(e['message'] == 'Test event flow' for e in events))
-        logger.info("✓ Event flow test passed")
-        
-    def test_3_monitor_integration(self):
-        """Test monitor integration"""
-        # Start SIEM
-        def run_siem():
-            self.siem.run(port=self.port)
-            
-        self.web_thread = threading.Thread(target=run_siem)
-        self.web_thread.daemon = True
-        self.web_thread.start()
-        time.sleep(5)
-        
-        # Create test file to trigger file monitor
-        test_file = os.path.join(self.test_dir, 'test.txt')
-        with open(test_file, 'w') as f:
-            f.write('Test content')
-            
-        time.sleep(2)
-        
-        # Check if event was captured
-        response = requests.get(f'http://localhost:{self.port}/api/events')
-        events = response.json()
-        self.assertTrue(any('test.txt' in str(e) for e in events))
-        logger.info("✓ Monitor integration test passed")
-        
-    def test_4_real_time_updates(self):
-        """Test real-time updates through WebSocket"""
-        # Start SIEM
-        def run_siem():
-            self.siem.run(port=self.port)
-            
-        self.web_thread = threading.Thread(target=run_siem)
-        self.web_thread.daemon = True
-        self.web_thread.start()
-        time.sleep(5)
-        
-        # Connect to WebSocket
-        ws_client = socketio.test_client(app)
-        self.assertTrue(ws_client.is_connected())
-        
-        # Create test event
-        test_event = {
-            'timestamp': datetime.now().isoformat(),
-            'severity': 'Critical',
-            'source': 'WebSocket Test',
-            'message': 'Test real-time updates'
-        }
-        
-        # Add event and check if received through WebSocket
-        received_events = []
-        @ws_client.on('new_event')
-        def handle_event(event):
-            received_events.append(event)
-            
-        self.siem.add_event(test_event)
-        time.sleep(2)
-        
-        self.assertTrue(any(e['message'] == 'Test real-time updates' for e in received_events))
-        logger.info("✓ Real-time updates test passed")
-        
-    def test_5_system_metrics(self):
-        """Test system metrics collection and reporting"""
-        # Start SIEM
-        def run_siem():
-            self.siem.run(port=self.port)
-            
-        self.web_thread = threading.Thread(target=run_siem)
-        self.web_thread.daemon = True
-        self.web_thread.start()
-        time.sleep(5)
-        
-        # Connect to WebSocket
-        ws_client = socketio.test_client(app)
-        self.assertTrue(ws_client.is_connected())
-        
-        # Check system stats
-        received_stats = []
-        @ws_client.on('system_stats')
-        def handle_stats(stats):
-            received_stats.append(stats)
-            
-        time.sleep(3)  # Wait for stats update
-        
-        self.assertTrue(len(received_stats) > 0)
-        stats = received_stats[-1]
-        self.assertIn('cpu_percent', stats)
-        self.assertIn('memory_percent', stats)
-        self.assertIn('network_speed', stats)
-        logger.info("✓ System metrics test passed")
-        
-    def test_6_error_handling(self):
-        """Test system-wide error handling"""
-        # Start SIEM
-        def run_siem():
-            self.siem.run(port=self.port)
-            
-        self.web_thread = threading.Thread(target=run_siem)
-        self.web_thread.daemon = True
-        self.web_thread.start()
-        time.sleep(5)
-        
-        # Test invalid event
-        invalid_event = "Not a dictionary"
-        self.siem.add_event(invalid_event)
-        
-        # Test invalid API request
-        response = requests.get(f'http://localhost:{self.port}/invalid')
-        self.assertEqual(response.status_code, 404)
-        
-        # Test invalid WebSocket message
-        ws_client = socketio.test_client(app)
-        ws_client.emit('invalid_event', 'invalid data')
-        time.sleep(1)
-        
-        # System should still be running
-        self.assertTrue(self.siem.running)
-        logger.info("✓ Error handling test passed")
+        # Test network log creation
+        log = NetworkLogModel(
+            timestamp=datetime.now(),
+            source_ip='127.0.0.1',
+            destination_ip='127.0.0.1',
+            protocol='TCP',
+            data='Test log'
+        )
+        session.add(log)
+        await session.commit()
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    pytest.main(['-v', __file__])

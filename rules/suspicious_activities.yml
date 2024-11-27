@@ -1,0 +1,232 @@
+title: Suspicious PowerShell Execution
+id: 1a2b3c4d-5e6f-7g8h-9i0j-1k2l3m4n5o6p
+status: experimental
+description: Detects suspicious PowerShell execution patterns
+author: SIEM Team
+date: 2023/10/15
+references:
+  - https://attack.mitre.org/techniques/T1059/001/
+logsource:
+  product: windows
+  service: powershell
+detection:
+  selection:
+    EventID:
+      - 4103
+      - 4104
+    ScriptBlockText|contains:
+      - "Invoke-Expression"
+      - "IEX"
+      - "Invoke-WebRequest"
+      - "DownloadString"
+      - "-enc"
+      - "-encodedcommand"
+      - "FromBase64String"
+  condition: selection
+falsepositives:
+  - Legitimate PowerShell scripts using these commands
+level: high
+
+---
+title: Potential Data Exfiltration
+id: 2b3c4d5e-6f7g-8h9i-0j1k-2l3m4n5o6p7q
+status: experimental
+description: Detects potential data exfiltration activities
+author: SIEM Team
+date: 2023/10/15
+references:
+  - https://attack.mitre.org/techniques/T1048/
+logsource:
+  product: windows
+  service: sysmon
+detection:
+  selection:
+    EventID: 3
+    DestinationHostname|endswith:
+      - 'pastebin.com'
+      - 'transfer.sh'
+      - 'mega.nz'
+      - 'anonfiles.com'
+    Initiated: 'true'
+  condition: selection
+falsepositives:
+  - Legitimate file sharing activities
+level: high
+
+---
+title: Suspicious Service Creation
+id: 3c4d5e6f-7g8h-9i0j-1k2l-3m4n5o6p7q8r
+status: experimental
+description: Detects suspicious service creation
+author: SIEM Team
+date: 2023/10/15
+references:
+  - https://attack.mitre.org/techniques/T1543/003/
+logsource:
+  product: windows
+  service: system
+detection:
+  selection:
+    EventID: 7045
+    ServiceName|contains:
+      - 'ADMIN$'
+      - 'svchost'
+      - 'lsass'
+      - 'csrss'
+    ImagePath|contains:
+      - '%TEMP%'
+      - '%AppData%'
+      - 'powershell'
+      - 'cmd.exe'
+  condition: selection
+falsepositives:
+  - Legitimate service installations
+level: high
+
+---
+title: Potential Credential Dumping
+id: 4d5e6f7g-8h9i-0j1k-2l3m-4n5o6p7q8r9s
+status: experimental
+description: Detects potential credential dumping from LSASS
+author: SIEM Team
+date: 2023/10/15
+references:
+  - https://attack.mitre.org/techniques/T1003/001/
+logsource:
+  product: windows
+  service: sysmon
+detection:
+  selection:
+    EventID: 10
+    TargetImage|endswith: 'lsass.exe'
+    GrantedAccess:
+      - '0x1010'
+      - '0x1410'
+      - '0x147a'
+  condition: selection
+falsepositives:
+  - Legitimate memory dumps
+level: high
+
+---
+title: Suspicious Registry Modifications
+id: 5e6f7g8h-9i0j-1k2l-3m4n-5o6p7q8r9s0t
+status: experimental
+description: Detects suspicious registry modifications
+author: SIEM Team
+date: 2023/10/15
+references:
+  - https://attack.mitre.org/techniques/T1112/
+logsource:
+  product: windows
+  service: sysmon
+detection:
+  selection:
+    EventID: 13
+    TargetObject|contains:
+      - '\CurrentVersion\Run'
+      - '\CurrentVersion\RunOnce'
+      - '\ServiceDll'
+      - '\ImagePath'
+      - '\Shell\Open\Command'
+    Details|contains:
+      - '.exe'
+      - '.dll'
+      - '.ps1'
+      - '.vbs'
+      - '.js'
+  condition: selection
+falsepositives:
+  - Software installations
+  - System updates
+level: medium
+
+---
+title: Suspicious Process Creation
+id: 6f7g8h9i-0j1k-2l3m-4n5o-6p7q8r9s0t1u
+status: experimental
+description: Detects suspicious process creation patterns
+author: SIEM Team
+date: 2023/10/15
+references:
+  - https://attack.mitre.org/techniques/T1059/
+logsource:
+  product: windows
+  service: sysmon
+detection:
+  selection:
+    EventID: 1
+    CommandLine|contains:
+      - 'whoami'
+      - 'net user'
+      - 'net localgroup'
+      - 'mimikatz'
+      - 'psexec'
+      - 'wmic'
+    Image|endswith:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+  condition: selection
+falsepositives:
+  - Administrative tasks
+  - System maintenance
+level: medium
+
+---
+title: Suspicious Network Connection
+id: 7g8h9i0j-1k2l-3m4n-5o6p-7q8r9s0t1u2v
+status: experimental
+description: Detects suspicious network connections
+author: SIEM Team
+date: 2023/10/15
+references:
+  - https://attack.mitre.org/techniques/T1071/
+logsource:
+  product: windows
+  service: sysmon
+detection:
+  selection:
+    EventID: 3
+    DestinationPort:
+      - 4444
+      - 8888
+      - 9999
+      - 1337
+    Image|endswith:
+      - '\powershell.exe'
+      - '\cmd.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+  condition: selection
+falsepositives:
+  - Custom applications using these ports
+level: high
+
+---
+title: Defense Evasion Attempt
+id: 8h9i0j1k-2l3m-4n5o-6p7q-8r9s0t1u2v3w
+status: experimental
+description: Detects attempts to disable security tools
+author: SIEM Team
+date: 2023/10/15
+references:
+  - https://attack.mitre.org/techniques/T1562/001/
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID:
+      - 4719  # System audit policy was changed
+      - 1102  # Audit log was cleared
+    CommandLine|contains:
+      - 'Disable-WindowsDefender'
+      - 'Set-MpPreference'
+      - 'wevtutil cl'
+      - 'Clear-EventLog'
+  condition: selection
+falsepositives:
+  - Legitimate security tool management
+level: high
