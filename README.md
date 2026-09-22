@@ -1,178 +1,99 @@
-# Enterprise SIEM System
+# Capstone SIEM — Real-Time Security Event Management
 
-A professional-grade Security Information and Event Management (SIEM) system with advanced defensive and offensive capabilities.
+Academic capstone implementation of a **Security Information and Event
+Management (SIEM)** system with **machine-learning anomaly detection**,
+multi-source collectors, YARA/Sigma detection rules, network monitoring, and a
+real-time dashboard (Python, asyncio, Socket.IO).
+
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/5h4d0wn1k/capstone)](https://github.com/5h4d0wn1k/capstone)
+[![Issues](https://img.shields.io/github/issues/5h4d0wn1k/capstone)](https://github.com/5h4d0wn1k/capstone/issues)
+[![Last commit](https://img.shields.io/github/last-commit/5h4d0wn1k/capstone)](https://github.com/5h4d0wn1k/capstone)
+
+## Why
+
+SIEM platforms sit at the center of every modern security operations center,
+yet the concepts behind them — pipelining logs through collectors, normalizers,
+correlation rules, and detection engines — are often hidden inside expensive
+commercial products. This capstone project surfaces those concepts in a
+practical, academic-grade system: an asyncio event pipeline that ingests events,
+applies rule-based and **Isolation-Forest-based anomaly detection**, computes a
+live threat level, and streams everything to a real-time web dashboard over
+Socket.IO. It demonstrates the full detection stack — collectors (Windows,
+Syslog, custom), YARA and Sigma detectors, event correlation, network flow
+analysis, and incident-response scaffolding — in one codebase, and is designed
+to be run and studied in a controlled lab environment on systems you own.
 
 ## Features
 
-### Core Capabilities
-- Real-time event monitoring and analysis
-- Advanced threat detection using machine learning
-- System health monitoring and metrics
-- Network traffic analysis
-- Comprehensive logging and auditing
+- **Real-time event pipeline** — asyncio + Socket.IO backed ingestion and streaming
+- **ML anomaly detection** — scikit-learn **Isolation Forest** on normalized event features
+- **Threshold-based detectors** — rule-driven alerts and severity classification
+- **Multi-source collectors** — Windows event, syslog, and custom log collectors
+- **YARA & Sigma detection** — signature and correlation rule engines
+- **Network monitoring** — packet capture, flow analysis, and protocol analysis modules
+- **Live dashboard** — event timeline, alert distribution, health indicators, threat level (`http://localhost:8080`)
+- **Incident-response scaffolding** — response actions, playbook engine, and case management modules
+- **Persistent storage** — SQLAlchemy async (SQLite `siem.db`) with event/alert/network models
 
-### Security Features
-- Anomaly detection using Isolation Forest
-- Real-time threat level calculation
-- Automated alert generation
-- Event correlation and analysis
-- System health monitoring
+## Quickstart
 
-### Dashboard
-- Real-time metrics and visualization
-- Interactive event timeline
-- Alert distribution charts
-- Live event and alert feeds
-- System health indicators
+Requirements: Python 3.x. Dependencies in `requirements.txt` (includes
+`aiohttp`, `python-socketio`, `sqlalchemy`, `scikit-learn`, `numpy`, `loguru`,
+`aiohttp-jinja2`, `cryptography`, `psutil`).
 
-### Monitoring
-- Windows Event Log monitoring
-- Network traffic analysis
-- System resource monitoring
-- Process monitoring
-- File system monitoring
-
-## Installation
-
-1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd siem
-```
-
-2. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-```
 
-4. Set up environment variables:
-```bash
-# Windows
-set SIEM_SECRET_KEY=your-secret-key
+# Set the secret key
+export SIEM_SECRET_KEY=your-secret-key     # Windows: set SIEM_SECRET_KEY=...
 
-# Linux/Mac
-export SIEM_SECRET_KEY=your-secret-key
-```
-
-## Configuration
-
-The system is configured through `config.yaml`. Key configuration sections:
-
-### System Settings
-- Environment (production/development)
-- Logging level
-- Secret key management
-
-### Monitoring Settings
-- Windows event log sources
-- Network interface monitoring
-- System metrics collection
-- Alert thresholds
-
-### Security Settings
-- Password policies
-- Session management
-- IP whitelisting/blacklisting
-- Alert severity levels
-
-### Machine Learning
-- Anomaly detection parameters
-- Model training intervals
-- Detection thresholds
-
-## Usage
-
-1. Start the SIEM system:
-```bash
+# Start the SIEM + dashboard
 python main.py
-```
 
-2. Access the dashboard:
-```
-http://localhost:8080
-```
+# Open the dashboard
+open http://localhost:8080
 
-3. Monitor the logs:
-```bash
+# Monitor the log stream
 tail -f siem.log
 ```
 
-## Dashboard Features
+Configuration lives in `config.yaml` (system, monitoring, security, and ML
+settings) with additional files under `config/` (`siem_config.yaml`,
+`test_config.yaml`, Prometheus examples).
 
-### Real-time Monitoring
-- Active Alerts Count
-- Events per Minute
-- Network Connections
-- System Load
+## Testing
 
-### Visualization
-- Event Timeline
-- Alert Distribution
-- System Health Metrics
-- Threat Level Indicators
+Run the pytest suite (async-mode configured in `pytest.ini`):
 
-### Alert Management
-- Real-time Alert Feed
-- Severity Classification
-- Alert Details
-- Response Actions
-
-## Security Considerations
-
-1. Access Control
-   - Use strong passwords
-   - Implement role-based access
-   - Regular credential rotation
-
-2. Network Security
-   - Secure all communications
-   - Monitor network boundaries
-   - Implement proper firewalls
-
-3. Data Protection
-   - Encrypt sensitive data
-   - Secure storage
-   - Regular backups
-
-## Development
-
-### Project Structure
-```
-siem/
-├── main.py              # Main application entry point
-├── config.yaml          # Configuration file
-├── requirements.txt     # Python dependencies
-├── templates/           # HTML templates
-│   └── dashboard.html   # Dashboard template
-├── modules/            
-│   ├── defensive/      # Defensive capabilities
-│   └── offensive/      # Offensive capabilities
-└── logs/               # Log files
+```bash
+python -m pytest
 ```
 
-### Adding New Features
-1. Create new module in appropriate directory
-2. Update configuration in config.yaml
-3. Add routes/handlers in main.py
-4. Update dashboard if needed
+or `python -m pytest tests` for the event-collection tests (`test_events.py`).
+
+## Project structure
+
+- `main.py` — asyncio application entry point (HTTP + WebSocket)
+- `models.py` — Event/Alert/NetworkLog DB models
+- `modules/` — capability tree: `collectors/`, `analyzers/`, `detectors/`
+  (YARA/Sigma/anomaly/ML), `monitors/`, `network/`, `defensive/`, `offensive/`
+- `web/` — API and dashboard plumbing (`app.py`, `alerts.py`, `auth.py`, `monitors.py`)
+- `config/` — YAML configuration, rule, and playbook directories
+- `static/` `templates/` — dashboard UI
+
+## Authorized use
+
+This project is an educational capstone. Use it only for learning, coursework,
+and lab experiments on systems you own or are explicitly authorized to assess.
+Handle collected data responsibly and follow applicable laws and your
+institution's policies.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+Contributions welcome: fork, create a feature branch, and submit a pull request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For support, please open an issue in the repository or contact the development team.
+Apache License 2.0 — see [LICENSE](LICENSE).
